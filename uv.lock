@@ -719,7 +719,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.31" },
     { name = "typer", specifier = ">=0.12" },
-    { name = "websockets", specifier = ">=12.0" },
+    { name = "websockets", specifier = ">=13.0" },
 ]
 
 [package.metadata.requires-dev]

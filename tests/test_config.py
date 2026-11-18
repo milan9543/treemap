@@ -18,7 +18,23 @@ def test_defaults_when_no_config_file():
 
 def test_repo_config_yaml_is_valid_and_matches_defaults():
     cfg = load_config(REPO_ROOT / "config.yaml")
-    assert cfg.to_dict() == Config().to_dict()
+    d, defaults = cfg.to_dict(), Config().to_dict()
+    # the file spells out the strips that the default (None) derives from led_count
+    assert d["sim"].pop("strips") == [{"leds": 200, "length": None, "start": "auto"}] * 2
+    defaults["sim"].pop("strips")
+    assert d == defaults
+
+
+def test_sim_strips(write_config):
+    write_config(
+        "led_count: 250\ncontrollers: []\n"
+        "sim:\n  strips:\n    - {leds: 150, length: 12}\n    - {leds: 100, start: top}\n"
+    )
+    cfg = load_config()
+    assert [(s.leds, s.length, s.start) for s in cfg.sim.strips] == [
+        (150, 12, "auto"),
+        (100, None, "top"),
+    ]
 
 
 def test_partial_sections_merge_with_defaults(write_config):
@@ -110,6 +126,13 @@ def test_invalid_yaml_is_an_error(write_config):
         ({"scan": {"profile": "a/b"}}, "profile"),
         ({"sim": {"port": 70000}}, "port must be <= 65535"),
         ({"sim": {"seed": 1.5}}, "seed must be an integer"),
+        ({"sim": {"strips": [{"leds": 200}]}}, "add up to 200 LEDs but led_count is 400"),
+        ({"sim": {"strips": [{"leds": 400, "colour": "red"}]}}, r"strips\[0\]: unknown key"),
+        ({"sim": {"strips": [{"leds": 400, "length": 1}]}}, r"sim: strip 1: .*cm between LEDs"),
+        ({"sim": {"strips": [{"leds": 400, "start": "middle"}]}}, "sim: strip 1 start"),
+        ({"sim": {"layout": "spiral"}}, "sim: layout"),
+        ({"sim": {"height": "tall"}}, "sim.height must be a number"),
+        ({"sim": {"quirks": "yes"}}, "sim.quirks must be true or false"),
     ],
 )
 def test_invalid_values_are_rejected(data, match):

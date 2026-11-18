@@ -50,8 +50,29 @@ class ScanConfig:
 
 
 @dataclass
+class EngineConfig:
+    fps: float = 40.0
+    brightness: float = 0.8
+    crossfade: float = 0.6  # seconds
+
+
+@dataclass
+class StripConfig:
+    """One strip on the simulated tree (see ``treemap.sim.tree.StripSpec``)."""
+
+    leds: int
+    length: float | None = None
+    start: str = "auto"
+
+
+@dataclass
 class SimConfig:
     seed: int | None = None
+    strips: list[StripConfig] | None = None  # None = led_count split over 2 strips
+    height: float | None = None
+    radius: float | None = None
+    layout: str = "auto"
+    quirks: bool = True
     tree_file: str = "data/sim_tree.json"
     host: str = "127.0.0.1"
     port: int = 8765
@@ -66,6 +87,7 @@ class Config:
     )
     camera: CameraConfig = field(default_factory=CameraConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
+    engine: EngineConfig = field(default_factory=EngineConfig)
     sim: SimConfig = field(default_factory=SimConfig)
 
     # Not a config key: directory relative paths are resolved against.
@@ -81,6 +103,15 @@ class Config:
     @property
     def scan_dir(self) -> Path:
         return self.resolve(Path("data") / "scans" / self.scan.profile)
+
+    @property
+    def map_path(self) -> Path:
+        """The reconstructed map written by ``treemap reconstruct``."""
+        return self.resolve(Path("data") / "tree_map.json")
+
+    @property
+    def sim_tree_path(self) -> Path:
+        return self.resolve(self.sim.tree_file)
 
     def to_dict(self) -> dict[str, Any]:
         """The config as plain data, without the non-key fields."""
@@ -132,8 +163,33 @@ class Config:
         _check_int("scan.brightness", s.brightness, minimum=1, maximum=255)
         _check_number("scan.min_confidence", s.min_confidence, minimum=0.0, maximum=1.0)
 
-        if self.sim.seed is not None:
-            _check_int("sim.seed", self.sim.seed)
+        _check_number("engine.fps", self.engine.fps, minimum=1, maximum=120)
+        _check_number("engine.brightness", self.engine.brightness, minimum=0, maximum=1)
+        _check_number("engine.crossfade", self.engine.crossfade, minimum=0, maximum=10)
+
+        sim = self.sim
+        if sim.seed is not None:
+            _check_int("sim.seed", sim.seed, minimum=0)
+        for i, st in enumerate(sim.strips or []):
+            _check_int(f"sim.strips[{i}].leds", st.leds, minimum=1)
+            if st.length is not None:
+                _check_number(f"sim.strips[{i}].length", st.length)
+        for key in ("height", "radius"):
+            if getattr(sim, key) is not None:
+                _check_number(f"sim.{key}", getattr(sim, key))
+        _check_bool("sim.quirks", sim.quirks)
+        if sim.strips is not None:
+            total = sum(st.leds for st in sim.strips)
+            if total != self.led_count:
+                raise ConfigError(
+                    f"sim.strips add up to {total} LEDs but led_count is {self.led_count}"
+                )
+        from treemap.sim.tree import SpecError, spec_from_config  # lazy: pulls in numpy
+
+        try:
+            spec_from_config(self)
+        except SpecError as e:
+            raise ConfigError(f"sim: {e}") from None
         if not isinstance(self.sim.tree_file, str) or not self.sim.tree_file:
             raise ConfigError("sim.tree_file must be a non-empty path")
         if not isinstance(self.sim.host, str) or not self.sim.host:
@@ -188,7 +244,9 @@ _NESTED: dict[tuple[type, str], tuple[type, bool]] = {
     (Config, "controllers"): (Controller, True),
     (Config, "camera"): (CameraConfig, False),
     (Config, "scan"): (ScanConfig, False),
+    (Config, "engine"): (EngineConfig, False),
     (Config, "sim"): (SimConfig, False),
+    (SimConfig, "strips"): (StripConfig, True),
 }
 
 
@@ -212,6 +270,9 @@ def _build(cls: type, data: Any, where: str, skip: frozenset[str] | set[str] = f
         if nested is None:
             kwargs[name] = value
         elif nested[1]:  # list of dataclasses
+            if value is None and known[name].default is None:
+                kwargs[name] = None  # optional list left unset
+                continue
             if not isinstance(value, list):
                 raise ConfigError(f"{sub}: expected a list, got {type(value).__name__}")
             kwargs[name] = [_build(nested[0], v, f"{sub}[{i}]") for i, v in enumerate(value)]

@@ -29,8 +29,25 @@ scan:
   brightness: 255      # 0-255 value used for the lit LED
   min_confidence: 0.3  # detections below this are discarded
 
+# Effects engine (treemap run, and the viewer's Effects panel).
+engine:
+  fps: 40              # frames per second sent to the LEDs
+  brightness: 0.8      # 0-1, scales every effect; also limits power draw
+  crossfade: 0.6       # seconds to blend when switching effects
+
+# The simulated tree (also editable in the viewer's Tree panel). null = random.
 sim:
   seed: null           # null = random tree each time
+  # LED strips in index order. leds must add up to led_count.
+  #   length: metres of strip; LED spacing = length / leds (null = random 6.5-8 cm)
+  #   start:  where index 0 is: bottom | top | auto (auto = sometimes top, if quirks)
+  strips:
+    - {leds: 200, length: null, start: auto}
+    - {leds: 200, length: null, start: auto}
+  height: null         # metres; null = random 1.5-2.2
+  radius: null         # metres at the base; null = random 0.5-0.8
+  layout: auto         # interleaved | stacked | auto (auto = sometimes stacked, if quirks)
+  quirks: true         # let "auto" settings pick wiring quirks at random
   tree_file: data/sim_tree.json
   host: 127.0.0.1
   port: 8765
