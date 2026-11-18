@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.DS_Store
+
+# generated data: raw scans and simulator ground truth (tree_map.json stays trackable)
+data/scans/
+data/sim_tree.json
