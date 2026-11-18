@@ -253,6 +253,40 @@ def sim_view(
         fail(f"Can't start the viewer on {cfg.sim.host}:{server.port}: {e.strerror or e}")
 
 
+@sim_app.command("evaluate")
+def sim_evaluate(ctx: typer.Context) -> None:
+    """Compare the reconstructed map with the simulated tree's true positions.
+
+    Errors are measured after the best rotation, scale and offset, as a percentage of
+    the tree's LED height (and in cm).
+    """
+    from treemap.mapping.model import TreeMap
+    from treemap.scan.evaluate import evaluate
+    from treemap.sim.tree import SimTree
+
+    cfg = ctx.obj.config
+    try:
+        tree_map = TreeMap.load(cfg.map_path)
+        tree = SimTree.load(cfg.sim_tree_path)
+        ev = evaluate(tree_map, tree)
+    except FileNotFoundError as e:
+        fail(f"{e.filename} not found: run `treemap scan` and `treemap reconstruct` first")
+    except (ValueError, KeyError) as e:
+        fail(str(e))
+    h = ev.height_m * 100
+    typer.echo(f"tree LEDs span {ev.height_m:.2f} m; alignment: rotated {ev.rotation_deg:+.1f}°, "
+               f"scale {ev.scale:.3f}")
+    typer.echo(f"  {'':<13}{'LEDs':>5}  {'median':>15}  {'p95':>15}")
+    for name, s in ev.table():
+        if s["count"]:
+            typer.echo(
+                f"  {name:<13}{s['count']:>5}  {s['median'] * 100:>5.2f}% {s['median'] * h:>5.1f} cm"
+                f"   {s['p95'] * 100:>5.2f}% {s['p95'] * h:>5.1f} cm"
+            )
+        else:
+            typer.echo(f"  {name:<13}{0:>5}")
+
+
 # -- effects --------------------------------------------------------------------------
 
 SecondsOptRun = Annotated[
@@ -358,6 +392,155 @@ def run_effect(
         engine.stop()
     if engine.error:
         fail(engine.error)
+
+
+# -- scan -----------------------------------------------------------------------------
+
+
+@app.command("scan")
+def scan(
+    ctx: typer.Context,
+    angle: Annotated[
+        list[float] | None,
+        typer.Option(
+            "--angle", "-a",
+            help="View angle in degrees; repeatable. Default: scan.angles.",
+            show_default=False,
+        ),
+    ] = None,
+    leds: Annotated[
+        str | None,
+        typer.Option(
+            help="LEDs to (re)scan, e.g. 120-140 or 1-3,7. Default: every LED not yet "
+            "scanned at that angle.",
+            show_default=False,
+        ),
+    ] = None,
+    fresh: Annotated[
+        bool, typer.Option(help="Discard earlier results for these angles and start over.")
+    ] = False,
+    settle_ms: Annotated[
+        int | None,
+        typer.Option(
+            min=0,
+            help="Wait after lighting an LED. Default: scan.settle_ms (0 with the sim camera).",
+            show_default=False,
+        ),
+    ] = None,
+    flash: Annotated[
+        float, typer.Option(min=0, help="Seconds to flash the found LEDs green after each angle.")
+    ] = 1.5,
+) -> None:
+    """Photograph each LED from each view angle and record where it appears.
+
+    Interrupted scans resume where they stopped. Results and debug images go to
+    data/scans/<scan.profile>/.
+    """
+    from treemap.cameras import CameraError, create_camera
+    from treemap.scan.capture import ScanError, load_scans, parse_leds, scan_angle
+
+    cfg = ctx.obj.config
+    n = cfg.led_count
+    try:
+        subset = parse_leds(leds, n) if leds is not None else None
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--leds") from None
+    angles = angle or cfg.scan.angles
+    if cfg.camera.type == "sim" and not cfg.sim_tree_path.exists():
+        typer.echo("No simulated tree yet, generating one:")
+        typer.echo(_describe_tree(_new_tree(cfg), n))
+    if settle_ms is None:
+        settle_ms = 0 if cfg.camera.type == "sim" else cfg.scan.settle_ms
+
+    with _output(ctx) as out:
+        try:
+            camera = create_camera(cfg, out)
+        except (CameraError, NotImplementedError) as e:
+            fail(str(e))
+        with camera:
+            for a in angles:
+                if not camera.set_angle(a):
+                    typer.prompt(
+                        f"Point the camera at {a:g}° and press Enter", default="",
+                        show_default=False,
+                    )
+
+                def progress(done: int, total: int, i: int, entry: dict, a=a) -> None:
+                    typer.echo(f"\rangle {a:>5g}°: LED {i:>4} ({done}/{total})", nl=False)
+
+                try:
+                    result = scan_angle(
+                        out, camera, a, cfg.scan_dir, leds=subset, fresh=fresh,
+                        settle_s=settle_ms / 1000, brightness=cfg.scan.brightness,
+                        min_confidence=cfg.scan.min_confidence, flash_s=flash,
+                        on_progress=progress,
+                    )
+                except KeyboardInterrupt:
+                    typer.echo("\ninterrupted; progress saved, run the same command to resume")
+                    raise
+                except ScanError as e:
+                    typer.echo()
+                    fail(str(e))
+                c = result.counts()
+                typer.echo(
+                    f"\rangle {a:>5g}°: {c['ok']} ok, {c['weak']} weak, {c['missing']} missing"
+                    + " " * 12
+                )
+
+    scans = load_scans(cfg.scan_dir)
+    seen = np.zeros(n, dtype=int)
+    for s in scans:
+        if s.led_count == n:
+            seen[s.ok_indices()] += 1
+    typer.echo(
+        f"{len(scans)} angle(s) in {cfg.scan_dir}: {(seen >= 2).sum()}/{n} LEDs found in "
+        f"2+ views, {(seen == 0).sum()} in none"
+    )
+    typer.echo("next: treemap reconstruct")
+
+
+def _ranges(indices: list[int], limit: int = 30) -> str:
+    """``[1, 2, 3, 7, 9, 10]`` -> ``1-3, 7, 9-10``."""
+    parts: list[str] = []
+    for i in indices:
+        if parts and i == last + 1:
+            parts[-1] = f"{parts[-1].split('-')[0]}-{i}"
+        else:
+            parts.append(str(i))
+        last = i
+    more = f", … ({len(parts) - limit} more)" if len(parts) > limit else ""
+    return ", ".join(parts[:limit]) + more
+
+
+@app.command("reconstruct")
+def reconstruct_cmd(ctx: typer.Context) -> None:
+    """Work out each LED's 3D position from the scans and write the tree map."""
+    from treemap.scan.capture import ScanError, load_scans
+    from treemap.scan.reconstruct import ReconstructionError, build_map
+
+    cfg = ctx.obj.config
+    try:
+        scans = load_scans(cfg.scan_dir)
+        tree_map, rec = build_map(scans, cfg.led_count)
+    except (ScanError, ReconstructionError) as e:
+        fail(f"Can't reconstruct from {cfg.scan_dir}: {e}")
+    tree_map.save(cfg.map_path)
+
+    angles = ", ".join(f"{s.angle:g}°" for s in scans)
+    offsets = ", ".join(f"{o:+.1f}°" for o in rec.angle_offsets[1:])
+    typer.echo(f"{len(scans)} views ({angles}); estimated angle errors after the first: {offsets}")
+    typer.echo(f"reprojection error: median {rec.info['median_residual_px']:.2f} px, "
+               f"focal length {rec.focal:.0f} px")
+    c = tree_map.counts()
+    typer.secho(f"  ok           {c['ok']:>4}", fg=typer.colors.GREEN)
+    typer.secho(f"  interpolated {c['interpolated']:>4}", fg=typer.colors.YELLOW)
+    typer.secho(f"  failed       {c['failed']:>4}", fg=typer.colors.RED)
+    for status in ("interpolated", "failed"):
+        if c[status]:
+            typer.echo(f"  {status}: {_ranges(tree_map.indices(status))}")
+    if tree_map.meta["outliers"]:
+        typer.echo(f"  dropped as outliers: {_ranges(tree_map.meta['outliers'])}")
+    typer.secho(f"saved {cfg.map_path}", fg=typer.colors.GREEN)
 
 
 # -- test patterns --------------------------------------------------------------------

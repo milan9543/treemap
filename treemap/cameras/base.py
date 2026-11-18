@@ -28,6 +28,15 @@ class Camera(ABC):
             )
         return frame
 
+    def set_angle(self, angle_deg: float) -> bool:
+        """Move to view angle ``angle_deg`` round the tree, if the camera can do it itself.
+
+        Returns False when a person has to move it (a real camera on a tripod); the
+        caller then asks them to. The angle convention is described in
+        :mod:`treemap.cameras.sim`.
+        """
+        return False
+
     def close(self) -> None:
         """Release resources. Safe to call more than once."""
 
