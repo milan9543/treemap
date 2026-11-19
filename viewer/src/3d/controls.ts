@@ -2,9 +2,8 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
+import { app } from "../lib/state.svelte";
 import { camera, renderer, resize } from "./scene";
-import { state } from "./state";
-import { $ } from "./util";
 
 export const WALK_FOV = 55; // degrees, vertical: the same as the phone's, so you see what it sees
 const ORBIT_FOV = 40;
@@ -19,19 +18,14 @@ let lastHeight = -1;
 orbit.addEventListener("start", () => { userMoved = true; });
 
 const look = new PointerLockControls(camera, renderer.domElement);
-export let walking = false;
 const keys = new Set<string>();
-const listeners: ((walking: boolean) => void)[] = [];
+let branchesBefore = false; // walking shows the branches; leaving restores them
 
-export function onWalkChange(fn: (walking: boolean) => void): void {
-  listeners.push(fn);
-}
-
-const treeSize = () => ({ H: state.tree?.height ?? 1.8, R: state.tree?.radius ?? 0.6 });
+const treeSize = () => ({ H: app.tree?.height ?? 1.8, R: app.tree?.radius ?? 0.6 });
 
 export function resetView(): void {
   const { H, R } = treeSize();
-  if (walking) {
+  if (app.walking) {
     camera.position.set(0, EYE, R + 1.6);
     camera.lookAt(0, H * 0.5, 0);
     return;
@@ -47,14 +41,16 @@ export function resetView(): void {
 /** After the tree changes: reset the view unless the user has moved it (same tree size). */
 export function treeChanged(): void {
   const { H } = treeSize();
-  if (!walking && (!userMoved || lastHeight !== H)) resetView();
+  if (!app.walking && (!userMoved || lastHeight !== H)) resetView();
 }
 
 export function setWalking(on: boolean): void {
-  if (on === walking) return;
-  walking = on;
+  if (on === app.walking) return;
+  app.walking = on;
   const { H, R } = treeSize();
   if (on) {
+    branchesBefore = app.layers.branch;
+    app.layers.branch = true;
     orbit.enabled = false;
     camera.fov = WALK_FOV;
     // start at eye height a couple of metres out, on the side the orbit view was on
@@ -66,6 +62,7 @@ export function setWalking(on: boolean): void {
     camera.lookAt(0, H * 0.5, 0);
     look.lock();
   } else {
+    app.layers.branch = branchesBefore;
     look.unlock();
     keys.clear();
     camera.fov = ORBIT_FOV;
@@ -78,20 +75,21 @@ export function setWalking(on: boolean): void {
     userMoved = true;
   }
   resize();
-  document.body.classList.toggle("walking", on);
-  $("walk").classList.toggle("active", on);
-  for (const fn of listeners) fn(on);
 }
 
-look.addEventListener("lock", () => document.body.classList.add("locked"));
-look.addEventListener("unlock", () => document.body.classList.remove("locked"));
-renderer.domElement.addEventListener("click", () => { if (walking && !look.isLocked) look.lock(); });
+/** Capture the mouse for looking round (needs a click or key press to be allowed). */
+export function lock(): void {
+  if (app.walking) look.lock();
+}
+
+look.addEventListener("lock", () => { app.locked = true; });
+look.addEventListener("unlock", () => { app.locked = false; keys.clear(); });
 
 const MOVE_KEYS = new Set(["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ShiftRight",
   "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
 
 export function walkKey(e: KeyboardEvent, down: boolean): boolean {
-  if (!walking || !MOVE_KEYS.has(e.code)) return false;
+  if (!app.walking || !app.locked || !MOVE_KEYS.has(e.code)) return false;
   if (down) keys.add(e.code);
   else keys.delete(e.code);
   e.preventDefault();
@@ -107,7 +105,7 @@ export function update(): void {
   const now = performance.now();
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
-  if (!walking) {
+  if (!app.walking) {
     orbit.update();
     return;
   }

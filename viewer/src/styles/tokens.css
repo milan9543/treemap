@@ -1,0 +1,32 @@
+/* Design tokens: every colour, size and radius in the viewer comes from here. */
+:root {
+  --bg: #0b0e13;          /* 3D view */
+  --surface: #11151c;     /* top bar, sidebar */
+  --surface-2: #171c25;   /* cards, inputs */
+  --surface-3: #1f2632;   /* hover, pressed */
+  --border: #242c39;
+  --border-strong: #323c4c;
+  --text: #e4e9f0;
+  --muted: #8b95a6;
+  --faint: #5d6778;
+  --accent: #6fd3a5;
+  --accent-bg: rgba(111, 211, 165, 0.13);
+  --accent-border: rgba(111, 211, 165, 0.38);
+  --ok: #4cc777;
+  --warn: #f0be5a;
+  --bad: #ef6f6f;
+  --info: #6ea8ff;
+  --ok-bg: rgba(76, 199, 119, 0.12);
+  --warn-bg: rgba(240, 190, 90, 0.12);
+  --bad-bg: rgba(239, 111, 111, 0.12);
+  --info-bg: rgba(110, 168, 255, 0.12);
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px;
+  --r1: 6px; --r2: 10px;
+  --t-xs: 11px; --t-sm: 12px; --t-md: 13px; --t-lg: 15px; --t-xl: 18px;
+  --font: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --topbar-h: 48px;
+  --sidebar-w: 360px;
+}

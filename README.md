@@ -41,41 +41,44 @@ uv run treemap sim view
 This opens the viewer at <http://127.0.0.1:8765/>. If there's no simulated tree yet, it
 generates one. Leave it running: the viewer can do everything the command line can.
 
-1. **Tree** panel (top right): set up the strips, size and layout, then press
+The top bar walks through the workflow: **Tree → Scan → Map → Effects** (keys `1`–`4`).
+The sidebar shows the current step and the 3D view fills the rest. On the right of the
+top bar, the **LEDs** pill shows what's lighting the LEDs (an effect, the scan, or
+nothing) with a Stop button, and ⚙ opens the configuration and the keyboard shortcuts.
+
+1. **Tree** (simulator only): set up the strips, size and layout, then press
    **Generate**. Leave a field blank to randomise it.
-2. **Scan** panel (below it): press **Start**. The view switches to walk mode and the
-   LEDs start flashing their codes. Walk round the tree:
-   - `W` `A` `S` `D` move, the mouse looks round (click the view to capture the mouse,
-     `Esc` frees it), `Space` and `Shift` go up and down;
-   - the **phone** inset at the bottom shows what the virtual phone films. LEDs it has
-     identified are circled green, with every fifth one numbered;
-   - every round ends with status colours on the tree and in the Mapping panel. Keep
-     walking towards the red parts. The scan stops by itself once every LED is ok, or
-     after `scan.max_rounds`; press `Esc` and then **Stop** to end it sooner.
+2. **Scan**: press **Start scanning**. The view switches to walk mode and the LEDs start
+   flashing their codes. Walk round the tree:
+   - `W` `A` `S` `D` move, the mouse looks round, `Space` and `Shift` go up and down;
+   - the panel at the top shows the round, its time left and how many LEDs were
+     identified; the **phone** in the bottom right shows what the virtual phone films,
+     with identified LEDs circled green;
+   - every round ends with status colours on the tree: green placed, yellow
+     interpolated, red unknown. Walk towards the red parts;
+   - `Esc` pauses: from there **Resume walking**, **Stop scan** or **Leave walk mode**.
+     The scan also stops by itself once every LED is ok, or after `scan.max_rounds`.
 
-   Each round writes `data/tree_map.json`. **Reconstruct** solves again from the saved
-   rounds. **Start over** forgets them.
-3. **Mapping** panel (left):
-   - **Status colours** lights each LED green (ok), yellow (interpolated) or red
-     (failed).
-   - **Verify sweep** runs a plane up the tree and then left to right. An LED that
-     lights out of step with its neighbours is in the wrong place.
-   - **Evaluate** compares the map with the simulated tree's true positions.
-   - Click a problem LED (or any LED in the 3D view) to light it blue. **Interpolate**
-     fills it in from its neighbours; to measure it better, scan again and film that
-     part of the tree.
-4. **Truth / Scanned / Compare** (top left, or `t` to cycle) switches between the
-   true positions, the scanned ones, and a comparison: a line from each LED's true
-   position to where the scan put it, coloured green (spot on) to red (5 cm or more
-   off), with the error per status underneath. Hover an LED to see its error. In the
-   simulator the scanned map is shown aligned onto the truth (best rotation, scale and
-   offset), as **Evaluate** does.
-5. **Effects** panel: click an effect to run it; its controls appear below. **Stop**
-   turns the LEDs off.
+   Each round writes `data/tree_map.json`. **Solve again** re-solves from the saved
+   rounds; **Start over** forgets them.
+3. **Map**: how many LEDs are placed, interpolated or failed.
+   - **Status colours** and **Verify sweep** check the map on the tree. In the sweep, an
+     LED that lights out of step with its neighbours is in the wrong place.
+   - In the simulator, **Accuracy vs the true tree** gives the error per status.
+     **Show** switches the 3D view to Compare.
+   - Click a problem LED (or any LED in the 3D view) to light it blue and inspect it.
+     **Interpolate** fills it in from its neighbours; to measure it better, scan again
+     and film that part of the tree.
+4. **Effects**: click an effect to run it. Its controls and the master brightness are
+   under **Now playing**.
 
-Other controls: drag to orbit, scroll to zoom, `f` toggles walk mode, `r` resets the
-view, `o` shows or hides unlit LEDs, `c` the cone, `b` the branches that hide LEDs from
-the phone, and `w` the wire path. **Config** shows the effective settings.
+The toolbar at the bottom of the 3D view switches between **Truth**, **Scanned** and
+**Compare** (`t` cycles). Compare draws a line from each LED's true position to where the
+scan put it, coloured green (spot on) to red (5 cm or more off); hover an LED to see its
+error. In the simulator the scanned map is shown aligned onto the truth (best rotation,
+scale and offset). **Layers** shows or hides the unlit LEDs (`o`), the cone (`c`), the
+branches that hide LEDs from the phone (`b`) and the wire path (`w`). Drag to orbit,
+scroll to zoom, `r` resets the view, `f` toggles walk mode and `[` the sidebar.
 
 ## The same from the command line
 
@@ -192,8 +195,12 @@ npm --prefix viewer run dev   # viewer with hot reload; keep `treemap sim view` 
 `npm run dev` serves the viewer at <http://localhost:5173/> and forwards the API and
 websockets to the Python server on port 8765 (or `TREEMAP_PORT`).
 
-The Python code is in `treemap/`; the viewer (Vite + TypeScript + three.js) is in
-`viewer/src/` and builds into `treemap/sim/viewer_dist/`.
+The Python code is in `treemap/`; the viewer (Vite + Svelte 5 + TypeScript + three.js) is in
+`viewer/src/` and builds into `treemap/sim/viewer_dist/`. In the viewer, `lib/` holds the
+shared state (Svelte runes), the server connection and the actions; `3d/` the three.js
+scene, camera controls and virtual phone; `components/` the shell (top bar, viewport,
+overlays) and `components/ui/` the small building blocks; `steps/` one component per
+workflow step.
 
 | Module | Contents |
 |---|---|

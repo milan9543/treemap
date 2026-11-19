@@ -1,5 +1,5 @@
 // The /ws/viewer connection: LED frames in, JSON messages both ways.
-import { $ } from "./util";
+import { app } from "./state.svelte";
 
 type Handler = (msg: any) => void;
 
@@ -42,9 +42,9 @@ export function request(type: string, reply: string, body: object): Promise<any>
 export function connect(): void {
   ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/viewer`);
   ws.binaryType = "arraybuffer";
-  ws.onopen = () => $("conn").classList.add("on");
+  ws.onopen = () => { app.connected = true; };
   ws.onclose = () => {
-    $("conn").classList.remove("on");
+    app.connected = false;
     for (const p of pending.values()) p.resolve({ ok: false, error: "lost connection to the server" });
     pending.clear();
     setTimeout(connect, 1000);

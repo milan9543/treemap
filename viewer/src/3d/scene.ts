@@ -1,18 +1,16 @@
 // The 3D scene: LEDs, cone, trunk, branches and wire path, plus the "photo" scene the
 // virtual phone films (always the true LED positions, with branches, no helpers).
 import * as THREE from "three";
-import { mapStatus, state } from "./state";
-import type { Vec3 } from "./types";
-import { $ } from "./util";
+import { app, mapStatus } from "../lib/state.svelte";
+import type { Vec3 } from "../lib/types";
 
 export const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setClearColor(0x07090d);
-document.body.prepend(renderer.domElement);
+renderer.setClearColor(0x0b0e13);
+renderer.domElement.style.display = "block"; // the Viewport component places it
 
 export const scene = new THREE.Scene();
-export const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.01, 100);
+export const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
 
 const ground = new THREE.PolarGridHelper(1.2, 8, 6, 64, 0x1c2430, 0x141a22);
 scene.add(ground);
@@ -91,10 +89,7 @@ photoScene.background = new THREE.Color(0x0a0b0d);
 const photoTree = new THREE.Group();
 photoScene.add(photoTree);
 
-export type Mode = "truth" | "scan" | "compare";
-
 export const view = {
-  mode: "truth" as Mode,
   truthPos: null as Float32Array | null,
   scanPos: null as Float32Array | null,
   points: null as THREE.Points | null,
@@ -114,16 +109,20 @@ export function errorColor(err_m: number, c = new THREE.Color()): THREE.Color {
   return c.setHSL((1 - t) * 0.33, 0.85, 0.5);
 }
 
+/** Take the tree, map and comparison from the app state; fix the view mode if the one
+ *  chosen has nothing to show. */
 export function setData(): void {
-  const { tree, map } = state;
+  const { tree, map } = app;
   view.truthPos = tree ? Float32Array.from(tree.positions.flat()) : null;
   // In the simulator the map is shown aligned onto the truth (as Evaluate does), so the
   // two can be compared; without a truth it's just scaled to a typical tree.
-  const cmp = state.compare;
+  const cmp = app.compare;
   view.scanPos = cmp ? toArray(cmp.positions) : map && map.positions ? scanToWorld(map.positions) : null;
-  if (!view.truthPos && view.scanPos) view.mode = "scan";
-  if (!view.scanPos) view.mode = "truth";
-  if (view.mode === "compare" && !(cmp && view.truthPos)) view.mode = view.truthPos ? "truth" : "scan";
+  if (!modeAvailable(app.viewMode)) app.viewMode = view.truthPos ? "truth" : "scan";
+}
+
+export function modeAvailable(m: "truth" | "scan" | "compare"): boolean {
+  return m === "truth" ? !!view.truthPos : m === "scan" ? !!view.scanPos : !!(view.truthPos && app.compare);
 }
 
 function toArray(pos: (Vec3 | null)[]): Float32Array {
@@ -136,7 +135,7 @@ function toArray(pos: (Vec3 | null)[]): Float32Array {
 // scale). Stretch it onto the ground truth's LED height range so the two overlay.
 function scanToWorld(pos: (Vec3 | null)[]): Float32Array {
   let y0 = 0, y1 = 1.8;
-  const tree = state.tree;
+  const tree = app.tree;
   if (tree) {
     const ys = tree.positions.map((p) => p[1]);
     y0 = Math.min(...ys);
@@ -177,14 +176,14 @@ export function rebuild(): void {
   disposeGroup(branches);
   disposeGroup(photoTree);
   disposeGroup(compareGroup);
-  const pos = view.mode === "scan" ? view.scanPos : view.truthPos;
+  const pos = app.viewMode === "scan" ? view.scanPos : view.truthPos;
   if (!pos) return;
 
   view.ledCount = pos.length / 3;
   view.colors = new Float32Array(view.ledCount * 3);
   colorAttr = new THREE.BufferAttribute(view.colors, 3).setUsage(THREE.DynamicDrawUsage);
   hiddenAttr = new THREE.BufferAttribute(new Float32Array(view.ledCount), 1);
-  for (const i of state.serverConfig?.hidden_leds ?? []) if (i < view.ledCount) hiddenAttr.setX(i, 1);
+  for (const i of app.config?.hidden_leds ?? []) if (i < view.ledCount) hiddenAttr.setX(i, 1);
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   geom.setAttribute("ledColor", colorAttr);
@@ -197,7 +196,7 @@ export function rebuild(): void {
 
   // Wire path, one polyline per strip (scanned maps have no strip info: one line).
   wire = new THREE.Group();
-  const tree = state.tree;
+  const tree = app.tree;
   const strands = tree ? tree.strands : [{ start: 0, count: view.ledCount }];
   const hues = [0.33, 0.58, 0.08, 0.83, 0.15, 0.5, 0.95, 0.7];
   strands.forEach((s, k) => {
@@ -208,7 +207,7 @@ export function rebuild(): void {
     });
     wire!.add(new THREE.Line(g, m));
   });
-  wire.visible = $("t-wire").classList.contains("active");
+  wire.visible = app.layers.wire;
   scene.add(wire);
 
   const H = tree ? tree.height : 1.8, R = tree ? tree.radius : 0.6;
@@ -226,7 +225,7 @@ export function rebuild(): void {
     new THREE.MeshBasicMaterial({ color: 0x5a3d26, transparent: true, opacity: 0.18, depthWrite: false }));
   trunk.position.y = H / 2;
   decor.add(cone, coneEdges, trunk);
-  decor.visible = $("t-cone").classList.contains("active");
+  decor.visible = app.layers.cone;
   ground.scale.setScalar(Math.max(R * 1.6, 0.6));
 
   if (tree && view.truthPos) {
@@ -240,12 +239,12 @@ export function rebuild(): void {
     photoPoints.frustumCulled = false;
     photoTree.add(photoPoints);
   }
-  if (view.mode === "compare") buildCompare();
+  if (app.viewMode === "compare") buildCompare();
   if (view.lastFrame) applyFrame(view.lastFrame);
 }
 
 function buildCompare(): void {
-  const cmp = state.compare, truth = view.truthPos;
+  const cmp = app.compare, truth = view.truthPos;
   if (!cmp || !truth) return;
   const line: number[] = [], lineCol: number[] = [], mark: number[] = [], markCol: number[] = [];
   const c = new THREE.Color();
@@ -327,14 +326,8 @@ export function applyFrame(buf: ArrayBuffer): void {
   for (let i = 0; i < n; i++) colors[i] = bytes[i] / 255;
   for (let i = n; i < colors.length; i++) colors[i] = 0;
   if (colorAttr) colorAttr.needsUpdate = true;
-  const w = $("warn");
-  if (view.ledCount && bytes.length !== view.ledCount * 3) {
-    w.textContent = `Frames have ${bytes.length / 3} LEDs but the tree has ${view.ledCount}. ` +
-      "Match led_count in config.yaml to the strips.";
-    w.style.display = "block";
-  } else {
-    w.style.display = "none";
-  }
+  const leds = bytes.length / 3;
+  if (app.frameLeds !== leds) app.frameLeds = leds;
 }
 
 export function setToggle(name: "off" | "cone" | "wire" | "branch", on: boolean): void {
@@ -350,26 +343,31 @@ raycaster.params.Points.threshold = 0.025;
 /** The LED under the pointer, if any. */
 export function pickLed(clientX: number, clientY: number): number | null {
   if (!view.points) return null;
-  const mouse = new THREE.Vector2((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+  const r = renderer.domElement.getBoundingClientRect();
+  const mouse = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
   raycaster.setFromCamera(mouse, camera);
   const hit = raycaster.intersectObject(view.points)[0];
   return hit && hit.index !== undefined ? hit.index : null;
 }
 
 export function describeLed(i: number): string {
-  const tree = state.tree;
+  const tree = app.tree;
   const strip = tree ? tree.strands.findIndex((s) => i >= s.start && i < s.start + s.count) : -1;
   const rgb = [0, 1, 2].map((k) => Math.round(view.colors[i * 3 + k] * 255)).join(", ");
   const st = mapStatus(i);
-  const err = state.compare?.errors_m[i];
+  const err = app.compare?.errors_m[i];
   const off = err === undefined ? "" : err === null ? " · not placed" : ` · off by ${(err * 100).toFixed(1)} cm`;
   return `#${i}${strip >= 0 ? ` · strip ${strip + 1}` : ""}${st ? ` · ${st}` : ""}${off} · rgb(${rgb})`;
 }
 
-export function resize(): void {
-  camera.aspect = window.innerWidth / window.innerHeight;
+let size = { w: 1, h: 1 };
+
+/** Fit the view to ``w`` × ``h`` CSS pixels (or the last size, after a FOV change). */
+export function resize(w = size.w, h = size.h): void {
+  size = { w: Math.max(w, 1), h: Math.max(h, 1) };
+  camera.aspect = size.w / size.h;
   camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setSize(size.w, size.h);
   ledMaterial.uniforms.uScale.value =
     renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
 }
