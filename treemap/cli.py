@@ -236,8 +236,10 @@ def sim_view(
         port=port or cfg.sim.port,
         led_count=cfg.led_count,
         defaults=spec_from_config(cfg),
-        make_engine=lambda s: _make_engine(cfg, sim_port=s.port),
+        make_engine=lambda s: _make_engine(cfg, sim_port=s.port, source="viewer: effects"),
         output_label=_output_label(cfg),
+        cfg=cfg,
+        make_jobs=lambda s: _make_jobs(cfg, s),
     )
 
     def ready(s: SimServer) -> None:
@@ -260,18 +262,12 @@ def sim_evaluate(ctx: typer.Context) -> None:
     Errors are measured after the best rotation, scale and offset, as a percentage of
     the tree's LED height (and in cm).
     """
-    from treemap.mapping.model import TreeMap
-    from treemap.scan.evaluate import evaluate
-    from treemap.sim.tree import SimTree
+    from treemap import workflow
 
     cfg = ctx.obj.config
     try:
-        tree_map = TreeMap.load(cfg.map_path)
-        tree = SimTree.load(cfg.sim_tree_path)
-        ev = evaluate(tree_map, tree)
-    except FileNotFoundError as e:
-        fail(f"{e.filename} not found: run `treemap scan` and `treemap reconstruct` first")
-    except (ValueError, KeyError) as e:
+        ev = workflow.evaluate_sim(cfg)
+    except workflow.WorkflowError as e:
         fail(str(e))
     h = ev.height_m * 100
     typer.echo(f"tree LEDs span {ev.height_m:.2f} m; alignment: rotated {ev.rotation_deg:+.1f}°, "
@@ -301,23 +297,44 @@ def _output_label(cfg: Config) -> str:
     return "sim"
 
 
-def _make_engine(cfg: Config, sim_port: int | None = None, brightness: float | None = None,
-                 fps: float | None = None):
-    """An effects engine sending to the configured output (the sim viewer on ``sim_port``)."""
-    from treemap.effects import EffectContext
-    from treemap.engine import Engine
+def _output_factory(cfg: Config, sim_port: int | None = None, source: str | None = None):
+    """Opens the configured output (the sim viewer on ``sim_port``). ``source`` names
+    the sender in the viewer (default: this command)."""
     from treemap.outputs import create_output
     from treemap.outputs.sim import SimOutput
 
-    def output_factory():
+    def factory():
         if cfg.output == "sim":
-            return SimOutput(cfg.led_count, host=cfg.sim.host, port=sim_port or cfg.sim.port)
+            return SimOutput(cfg.led_count, host=cfg.sim.host, port=sim_port or cfg.sim.port,
+                             source=source)
         return create_output(cfg)
+
+    return factory
+
+
+def _make_jobs(cfg: Config, server):
+    """Background scan/reconstruct/fix jobs for the viewer served by ``server``."""
+    from treemap.jobs import Jobs
+
+    def stop_effects() -> None:
+        if server.engine is not None:
+            server.engine.stop()
+
+    return Jobs(cfg, _output_factory(cfg, server.port, source="viewer: scan"),
+                stop_effects=stop_effects)
+
+
+def _make_engine(cfg: Config, sim_port: int | None = None, brightness: float | None = None,
+                 fps: float | None = None, source: str | None = None):
+    """An effects engine sending to the configured output (the sim viewer on ``sim_port``)."""
+    from treemap.effects import EffectContext
+    from treemap.engine import Engine
+    from treemap.mapping.model import MapFile
 
     fps = fps or cfg.engine.fps
     return Engine(
-        output_factory,
-        EffectContext(n=cfg.led_count, fps=fps),
+        _output_factory(cfg, sim_port, source),
+        EffectContext(n=cfg.led_count, fps=fps, tree_map=MapFile(cfg.map_path)),
         fps=fps,
         brightness=cfg.engine.brightness if brightness is None else brightness,
         crossfade_s=cfg.engine.crossfade,
@@ -436,67 +453,59 @@ def scan(
     Interrupted scans resume where they stopped. Results and debug images go to
     data/scans/<scan.profile>/.
     """
-    from treemap.cameras import CameraError, create_camera
-    from treemap.scan.capture import ScanError, load_scans, parse_leds, scan_angle
+    from treemap import workflow
 
     cfg = ctx.obj.config
     n = cfg.led_count
     try:
-        subset = parse_leds(leds, n) if leds is not None else None
-    except ValueError as e:
+        subset = workflow.parse_led_subset(leds, n)
+    except workflow.WorkflowError as e:
         raise typer.BadParameter(str(e), param_hint="--leds") from None
-    angles = angle or cfg.scan.angles
-    if cfg.camera.type == "sim" and not cfg.sim_tree_path.exists():
-        typer.echo("No simulated tree yet, generating one:")
-        typer.echo(_describe_tree(_new_tree(cfg), n))
-    if settle_ms is None:
-        settle_ms = 0 if cfg.camera.type == "sim" else cfg.scan.settle_ms
+    if workflow.ensure_sim_tree(cfg):
+        typer.echo("No simulated tree yet, generated one.")
 
     with _output(ctx) as out:
-        try:
-            camera = create_camera(cfg, out)
-        except (CameraError, NotImplementedError) as e:
-            fail(str(e))
-        with camera:
-            for a in angles:
-                if not camera.set_angle(a):
-                    typer.prompt(
-                        f"Point the camera at {a:g}° and press Enter", default="",
-                        show_default=False,
-                    )
+        _run_scan(cfg, out, angle or cfg.scan.angles, subset, fresh=fresh,
+                  settle_ms=settle_ms, flash=flash)
 
-                def progress(done: int, total: int, i: int, entry: dict, a=a) -> None:
-                    typer.echo(f"\rangle {a:>5g}°: LED {i:>4} ({done}/{total})", nl=False)
-
-                try:
-                    result = scan_angle(
-                        out, camera, a, cfg.scan_dir, leds=subset, fresh=fresh,
-                        settle_s=settle_ms / 1000, brightness=cfg.scan.brightness,
-                        min_confidence=cfg.scan.min_confidence, flash_s=flash,
-                        on_progress=progress,
-                    )
-                except KeyboardInterrupt:
-                    typer.echo("\ninterrupted; progress saved, run the same command to resume")
-                    raise
-                except ScanError as e:
-                    typer.echo()
-                    fail(str(e))
-                c = result.counts()
-                typer.echo(
-                    f"\rangle {a:>5g}°: {c['ok']} ok, {c['weak']} weak, {c['missing']} missing"
-                    + " " * 12
-                )
-
-    scans = load_scans(cfg.scan_dir)
-    seen = np.zeros(n, dtype=int)
-    for s in scans:
-        if s.led_count == n:
-            seen[s.ok_indices()] += 1
+    c = workflow.coverage(cfg)
     typer.echo(
-        f"{len(scans)} angle(s) in {cfg.scan_dir}: {(seen >= 2).sum()}/{n} LEDs found in "
-        f"2+ views, {(seen == 0).sum()} in none"
+        f"{c['angles']} angle(s) in {cfg.scan_dir}: {c['two_plus']}/{n} LEDs found in "
+        f"2+ views, {c['none']} in none"
     )
     typer.echo("next: treemap reconstruct")
+
+
+def _ask_to_move(angle: float) -> None:
+    typer.prompt(f"Point the camera at {angle:g}° and press Enter", default="",
+                 show_default=False)
+
+
+def _progress(angle: float, done: int, total: int, i: int, entry: dict) -> None:
+    typer.echo(f"\rangle {angle:>5g}°: LED {i:>4} ({done}/{total})", nl=False)
+
+
+def _angle_done(angle: float, result) -> None:
+    c = result.counts()
+    typer.echo(f"\rangle {angle:>5g}°: {c['ok']} ok, {c['weak']} weak, {c['missing']} missing"
+               + " " * 12)
+
+
+def _run_scan(cfg: Config, out, angles, leds, *, fresh: bool, settle_ms: int | None,
+              flash: float) -> None:
+    """:func:`workflow.run_scan` with terminal progress and prompts."""
+    from treemap import workflow
+
+    try:
+        workflow.run_scan(cfg, out, angles, leds, fresh=fresh, settle_ms=settle_ms,
+                          flash_s=flash, ask_to_move=_ask_to_move, on_progress=_progress,
+                          on_angle=_angle_done)
+    except KeyboardInterrupt:
+        typer.echo("\ninterrupted; progress saved, run the same command to resume")
+        raise
+    except workflow.WorkflowError as e:
+        typer.echo()
+        fail(str(e))
 
 
 def _ranges(indices: list[int], limit: int = 30) -> str:
@@ -512,35 +521,179 @@ def _ranges(indices: list[int], limit: int = 30) -> str:
     return ", ".join(parts[:limit]) + more
 
 
+def _rebuild_map(cfg: Config):
+    """Reconstruct from the scans (honouring overrides) and save the map."""
+    from treemap import workflow
+
+    try:
+        return workflow.rebuild_map(cfg)
+    except workflow.WorkflowError as e:
+        fail(f"Can't reconstruct: {e}")
+
+
+def _map_summary(tree_map) -> None:
+    c = tree_map.counts()
+    labels = {"ok": ("green", typer.colors.GREEN), "interpolated": ("yellow", typer.colors.YELLOW),
+              "failed": ("red", typer.colors.RED)}
+    for status, (colour, fg) in labels.items():
+        typer.secho(f"  {status:<13}{c[status]:>4}  {colour}", fg=fg, nl=False)
+        idx = tree_map.indices(status) if status != "ok" else []
+        typer.echo(f": {_ranges(idx)}" if idx else "")
+    if tree_map.meta.get("outliers"):
+        typer.echo(f"  dropped as outliers: {_ranges(tree_map.meta['outliers'])}")
+    if tree_map.meta.get("forced_interpolate"):
+        typer.echo(f"  interpolated by `fix`: {_ranges(tree_map.meta['forced_interpolate'])}")
+
+
 @app.command("reconstruct")
 def reconstruct_cmd(ctx: typer.Context) -> None:
     """Work out each LED's 3D position from the scans and write the tree map."""
-    from treemap.scan.capture import ScanError, load_scans
-    from treemap.scan.reconstruct import ReconstructionError, build_map
-
     cfg = ctx.obj.config
-    try:
-        scans = load_scans(cfg.scan_dir)
-        tree_map, rec = build_map(scans, cfg.led_count)
-    except (ScanError, ReconstructionError) as e:
-        fail(f"Can't reconstruct from {cfg.scan_dir}: {e}")
-    tree_map.save(cfg.map_path)
-
+    tree_map, rec, scans = _rebuild_map(cfg)
     angles = ", ".join(f"{s.angle:g}°" for s in scans)
     offsets = ", ".join(f"{o:+.1f}°" for o in rec.angle_offsets[1:])
     typer.echo(f"{len(scans)} views ({angles}); estimated angle errors after the first: {offsets}")
     typer.echo(f"reprojection error: median {rec.info['median_residual_px']:.2f} px, "
                f"focal length {rec.focal:.0f} px")
-    c = tree_map.counts()
-    typer.secho(f"  ok           {c['ok']:>4}", fg=typer.colors.GREEN)
-    typer.secho(f"  interpolated {c['interpolated']:>4}", fg=typer.colors.YELLOW)
-    typer.secho(f"  failed       {c['failed']:>4}", fg=typer.colors.RED)
-    for status in ("interpolated", "failed"):
-        if c[status]:
-            typer.echo(f"  {status}: {_ranges(tree_map.indices(status))}")
-    if tree_map.meta["outliers"]:
-        typer.echo(f"  dropped as outliers: {_ranges(tree_map.meta['outliers'])}")
+    _map_summary(tree_map)
     typer.secho(f"saved {cfg.map_path}", fg=typer.colors.GREEN)
+    typer.echo("next: treemap show-mapping")
+
+
+def _load_map(cfg: Config):
+    from treemap import workflow
+
+    try:
+        return workflow.load_map(cfg)
+    except workflow.WorkflowError as e:
+        fail(f"{e} (`treemap scan`, `treemap reconstruct`)")
+
+
+@app.command("show-mapping")
+def show_mapping(
+    ctx: typer.Context,
+    verify: Annotated[
+        bool,
+        typer.Option(
+            "--verify",
+            help="Sweep a rising plane, then a left-to-right one, through the mapped "
+            "positions. An LED lighting out of step with its neighbours is mis-mapped.",
+        ),
+    ] = False,
+    seconds: SecondsOpt = None,
+    sweep: Annotated[float, typer.Option(min=1, help="Seconds per sweep with --verify.")] = 6.0,
+    loop: Annotated[bool, typer.Option(help="With --verify: repeat until Ctrl-C.")] = False,
+) -> None:
+    """Light each LED by mapping quality: green ok, yellow interpolated, red failed."""
+    from treemap.mapping.quality import status_frame, verify_frames
+    from treemap.patterns import hold, play
+
+    cfg = ctx.obj.config
+    tree_map = _load_map(cfg)
+    typer.echo(f"{cfg.map_path} ({tree_map.meta.get('created', '?')}):")
+    _map_summary(tree_map)
+    problems = tree_map.indices("interpolated") + tree_map.indices("failed")
+    if problems:
+        typer.echo(f"inspect one with: treemap fix {problems[0]}")
+    with _output(ctx) as out:
+        if verify:
+            typer.echo("rising plane, then left-to-right sweep"
+                       + (" (Ctrl-C to stop)" if loop else ""))
+            while True:
+                play(out, verify_frames(tree_map, fps=cfg.engine.fps, seconds=sweep),
+                     cfg.engine.fps)
+                if not loop:
+                    break
+        else:
+            typer.echo(f"showing status colours{'' if seconds else ' (Ctrl-C to stop)'}")
+            hold(out, status_frame(tree_map), seconds)
+
+
+@app.command("fix")
+def fix(
+    ctx: typer.Context,
+    index: Annotated[int, typer.Argument(min=0, help="LED to inspect.")],
+    action: Annotated[
+        str | None,
+        typer.Option(
+            help="rescan, interpolate or keep. Default: ask.", show_default=False,
+        ),
+    ] = None,
+    angle: Annotated[
+        list[float] | None,
+        typer.Option("--angle", "-a", help="Angles to rescan at. Default: every scanned angle.",
+                     show_default=False),
+    ] = None,
+) -> None:
+    """Show one LED blue (neighbours dim), then rescan it or interpolate it.
+
+    `interpolate` makes reconstruct ignore its detections from now on and fill it in
+    from its neighbours; `rescan` photographs it again and drops that override.
+    """
+    from treemap import workflow
+    from treemap.mapping.quality import fix_frame
+    from treemap.patterns import showing
+    from treemap.scan.capture import load_scans
+
+    cfg = ctx.obj.config
+    n = cfg.led_count
+    if index >= n:
+        raise typer.BadParameter(f"must be below led_count ({n})", param_hint="INDEX")
+    if action not in (None, "rescan", "interpolate", "keep"):
+        raise typer.BadParameter("rescan, interpolate or keep", param_hint="--action")
+    tree_map = _load_map(cfg)
+    scans = load_scans(cfg.scan_dir)
+    _describe_led(tree_map, scans, index)
+
+    with _output(ctx) as out:
+        with showing(out, fix_frame(n, index)):
+            typer.echo(f"LED {index} is lit blue, its neighbours dim white.")
+            while action not in ("rescan", "interpolate", "keep"):
+                answer = typer.prompt("[r]escan, [i]nterpolate or [k]eep?", default="k")
+                action = {"r": "rescan", "i": "interpolate", "k": "keep"}.get(
+                    answer.strip().lower()[:1]
+                )
+        if action == "keep":
+            return
+        try:
+            if action == "rescan":
+                workflow.rescan_led(cfg, out, index, angle, ask_to_move=_ask_to_move,
+                                    on_angle=lambda a, r: _rescan_done(a, r, index))
+            else:
+                workflow.set_interpolate(cfg, index, True)
+        except workflow.WorkflowError as e:
+            fail(str(e))
+
+    tree_map, _, scans = _rebuild_map(cfg)
+    typer.echo(f"map rebuilt; LED {index} is now {tree_map.status[index]}")
+
+
+def _rescan_done(angle: float, result, index: int) -> None:
+    e = result.leds[index]
+    found = e["status"] + (f", confidence {e['confidence']:.2f}" if e["status"] != "missing" else "")
+    typer.echo(f"angle {angle:>5g}°: LED {index} {found}")
+
+
+def _describe_led(tree_map, scans, index: int) -> None:
+    status = tree_map.status[index]
+    fg = {"ok": typer.colors.GREEN, "interpolated": typer.colors.YELLOW}.get(status, typer.colors.RED)
+    typer.secho(f"LED {index}: {status}", fg=fg, bold=True)
+    for s in scans:
+        e = s.leds.get(index)
+        if e is None:
+            seen = "not scanned"
+        elif e["status"] == "missing":
+            seen = "not found"
+        else:
+            seen = f"{e['status']} at ({e['u']:.0f}, {e['v']:.0f}), confidence {e['confidence']:.2f}"
+        typer.echo(f"  {s.angle:>5g}°: {seen}")
+    if index in tree_map.meta.get("outliers", []):
+        typer.echo("  dropped as an outlier: too far from its neighbours on the strip")
+    if index in tree_map.meta.get("forced_interpolate", []):
+        typer.echo("  interpolated on request (treemap fix)")
+    lo, hi = max(index - 3, 0), min(index + 4, tree_map.led_count)
+    near = ", ".join(f"{j} {tree_map.status[j]}" for j in range(lo, hi) if j != index)
+    typer.echo(f"  neighbours: {near}")
 
 
 # -- test patterns --------------------------------------------------------------------

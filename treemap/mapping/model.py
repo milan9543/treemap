@@ -72,3 +72,27 @@ class TreeMap:
     @classmethod
     def load(cls, path: str | Path) -> TreeMap:
         return cls.from_dict(json.loads(Path(path).read_text()))
+
+
+class MapFile:
+    """The tree map at ``path``, reloaded when the file changes. Calling it returns the
+    current :class:`TreeMap`, or None if there isn't a readable one."""
+
+    def __init__(self, path: str | Path) -> None:
+        self.path = Path(path)
+        self._stamp: int | None = None
+        self._map: TreeMap | None = None
+
+    def __call__(self) -> TreeMap | None:
+        try:
+            stamp = self.path.stat().st_mtime_ns
+        except FileNotFoundError:
+            self._stamp, self._map = None, None
+            return None
+        if stamp != self._stamp:
+            try:
+                self._map = TreeMap.load(self.path)
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+                self._map = None
+            self._stamp = stamp
+        return self._map

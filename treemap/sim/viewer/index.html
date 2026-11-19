@@ -27,11 +27,13 @@
   #left { position: fixed; top: 12px; left: 12px; width: 300px; max-height: calc(100vh - 24px);
     display: flex; flex-direction: column; gap: 10px; }
   #left .panel { flex: none; }
-  #left #fx { flex: 0 1 auto; min-height: 0; }
-  #gen { position: fixed; top: 12px; right: 12px; width: 384px; max-height: calc(100vh - 24px); }
+  #left #fx, #left #mp { flex: 0 1 auto; min-height: 0; }
+  #right { position: fixed; top: 12px; right: 12px; width: 384px; max-height: calc(100vh - 24px);
+    display: flex; flex-direction: column; gap: 10px; }
+  #right .panel { flex: 0 1 auto; min-height: 0; }
   @media (max-width: 760px) {
     #left { left: 8px; right: 8px; top: 8px; width: auto; max-height: 46vh; }
-    #gen { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-height: 46vh; }
+    #right { left: 8px; right: 8px; top: auto; bottom: 8px; width: auto; max-height: 46vh; }
   }
   h1, h2 { font-size: 14px; margin: 0; font-weight: 600; letter-spacing: 0.02em; display: flex; align-items: center; gap: 8px; }
   .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -51,7 +53,9 @@
   button:disabled { opacity: 0.4; cursor: not-allowed; }
   kbd { font: 11px var(--mono); color: var(--muted); margin-left: 4px; }
   #info { margin-top: 6px; font: 12px var(--mono); color: var(--muted); white-space: pre-wrap; }
-  #warn { margin-top: 8px; color: var(--warn); display: none; }
+  #warn, #warn-src { margin-top: 8px; color: var(--warn); display: none; }
+  #warn-src ul { margin: 4px 0; padding-left: 16px; }
+  #warn-src code { font: 11px var(--mono); }
   #tip { position: fixed; pointer-events: none; display: none; background: var(--panel); border: 1px solid var(--border);
     border-radius: 6px; padding: 4px 8px; font: 12px var(--mono); white-space: nowrap; }
   #empty { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; padding: 16px; pointer-events: none; }
@@ -99,6 +103,46 @@
   #fx-desc:empty { display: none; }
   #fx-status { margin-top: 6px; font-size: 12px; color: var(--muted); min-height: 1.2em; }
   #fx-status.bad { color: var(--bad); }
+
+  /* mapping panel */
+  #mp.collapsed #mp-body { display: none; }
+  .counts { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; font: 12px var(--mono); }
+  .counts span { display: inline-flex; align-items: center; gap: 5px; }
+  .sw { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .sw.ok { background: #46c46e; } .sw.interpolated { background: var(--warn); } .sw.failed { background: var(--bad); }
+  #mp button.running { background: rgba(127, 209, 168, 0.22); color: var(--accent); border-color: rgba(127, 209, 168, 0.45); }
+  #mp .chips button { font: 11px var(--mono); padding: 2px 7px; }
+  #mp .chips button.interpolated { color: var(--warn); }
+  #mp .chips button.failed { color: var(--bad); }
+  #mp-led { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  #mp-led:empty { display: none; }
+  #mp-led code { font: 11px var(--mono); color: var(--text); }
+  .dets { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 10px; margin-top: 4px; font: 11px var(--mono); }
+  .dets .ok { color: #46c46e; } .dets .weak { color: var(--warn); } .dets .missing { color: var(--bad); }
+
+  /* scan panel and jobs */
+  #sc.collapsed #sc-body { display: none; }
+  .jobline { margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .jobline:empty { display: none; }
+  .jobline.bad { color: var(--bad); }
+  .jobline.good { color: var(--accent); }
+  .bar { height: 5px; background: var(--field); border-radius: 3px; overflow: hidden; margin-top: 5px; }
+  .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.15s; }
+  .prompt { display: none; margin-top: 8px; padding: 8px; border: 1px solid rgba(240, 195, 106, 0.4);
+    border-radius: 7px; color: var(--warn); font-size: 12px; align-items: center; gap: 8px; justify-content: space-between; }
+  .prompt.on { display: flex; }
+  .prompt span:last-child { display: flex; gap: 6px; flex: none; }
+  table.res th, table.res td { font: 12px var(--mono); }
+  table.res td.n, table.res th.n { text-align: right; }
+  .thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
+  .thumbs a { display: block; text-align: center; font: 11px var(--mono); color: var(--muted); text-decoration: none; }
+  .thumbs a:hover { color: var(--text); }
+  .thumbs img { width: 100%; aspect-ratio: 3 / 4; object-fit: contain; border-radius: 5px;
+    border: 1px solid var(--border); background: #000; display: block; margin-bottom: 2px; }
+  #sc-cover { margin-top: 6px; font-size: 12px; color: var(--muted); }
+  #cfg-view { display: none; margin-top: 8px; max-height: 40vh; overflow: auto; font: 11px var(--mono);
+    color: var(--muted); white-space: pre; background: var(--field); border-radius: 6px; padding: 6px 8px; }
+  #cfg-view.on { display: block; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -123,9 +167,35 @@
     <button id="t-off" class="active" title="Show unlit LEDs as small dots">Unlit<kbd>o</kbd></button>
     <button id="t-cone" class="active" title="Show the cone and trunk">Cone<kbd>c</kbd></button>
     <button id="t-wire" title="Show the wire path in index order">Wire<kbd>w</kbd></button>
+    <button id="t-cfg" title="Show the effective configuration (config.yaml merged with defaults)">Config</button>
   </div>
   <div id="warn"></div>
+  <div id="warn-src"></div>
+  <pre id="cfg-view"></pre>
 </div>
+
+<section id="mp" class="panel">
+  <div class="head">
+    <h2>Mapping <span id="mp-when" class="muted" style="font-weight: 400"></span></h2>
+    <button id="mp-toggle" class="icon" title="Show or hide the mapping quality" aria-expanded="true">hide</button>
+  </div>
+  <div id="mp-body">
+    <div id="mp-empty" class="muted" style="margin-top: 6px">No tree map yet: scan in the Scan panel, then Reconstruct.</div>
+    <div id="mp-main">
+      <div id="mp-counts" class="counts"></div>
+      <div class="row">
+        <button id="mp-status" data-effect="map-status" title="Light every LED by mapping quality">Status colours</button>
+        <button id="mp-verify" data-effect="map-verify" title="A plane rising, then sweeping left to right, through the mapped positions">Verify sweep</button>
+        <button id="mp-evaluate" title="Compare the map with the simulated tree's true positions">Evaluate</button>
+      </div>
+      <div id="mp-eval"></div>
+      <div id="mp-problems"></div>
+    </div>
+    <div id="mp-led"></div>
+    <div id="mp-prompt" class="prompt"><span></span><span><button class="primary" data-act="continue">Continue</button><button data-act="cancel">Stop</button></span></div>
+    <div id="mp-job" class="jobline"></div>
+  </div>
+</section>
 
 <section id="fx" class="panel">
   <div class="head">
@@ -149,7 +219,8 @@
 </section>
 </div>
 
-<aside id="gen" class="panel">
+<div id="right">
+<section id="gen" class="panel">
   <div class="head">
     <h2>Tree</h2>
     <button id="gen-toggle" class="icon" title="Show or hide the tree settings" aria-expanded="true">hide</button>
@@ -188,7 +259,37 @@
     <div id="g-status"></div>
     <ul id="g-warnings"></ul>
   </div>
-</aside>
+</section>
+
+<section id="sc" class="panel">
+  <div class="head">
+    <h2>Scan <span id="sc-cam" class="muted" style="font-weight: 400"></span></h2>
+    <button id="sc-toggle" class="icon" title="Show or hide scanning" aria-expanded="true">hide</button>
+  </div>
+  <div id="sc-body">
+    <div class="grid">
+      <label>Angles ° <input id="sc-angles" placeholder="0, 90, 180, 270" title="View angles, comma separated"></label>
+      <label>LEDs <input id="sc-leds" placeholder="all not yet scanned" title="e.g. 120-140 or 1-3, 7: scanned again even if done"></label>
+    </div>
+    <label class="check" title="Discard earlier results for these angles instead of resuming">
+      <input type="checkbox" id="sc-fresh"> Start over
+    </label>
+    <div class="row">
+      <button id="sc-start" class="primary" title="Light each LED in turn and find it in each view">Scan</button>
+      <button id="sc-recon" title="Work out the 3D positions from the scans and rebuild the map">Reconstruct</button>
+      <button id="sc-stop" title="Stop the running job; scan progress is kept">Stop</button>
+    </div>
+    <div id="sc-prompt" class="prompt"><span></span><span><button class="primary" data-act="continue">Continue</button><button data-act="cancel">Stop</button></span></div>
+    <div id="sc-job" class="jobline"></div>
+    <table id="sc-table" class="res">
+      <thead><tr><th>Angle</th><th class="n">ok</th><th class="n">weak</th><th class="n">missing</th></tr></thead>
+      <tbody id="sc-rows"></tbody>
+    </table>
+    <div id="sc-cover"></div>
+    <div id="sc-thumbs" class="thumbs" title="Debug images: click for full size"></div>
+  </div>
+</section>
+</div>
 
 <div id="tip"></div>
 <div id="empty"><div>No simulated tree yet.<br><br>Set up the strips in the Tree panel and press Generate.</div></div>
@@ -282,6 +383,7 @@ async function loadAll() {
   $("mode-scan").disabled = !scanPos;
   $("mode-truth").disabled = !truthPos;
   rebuild();
+  renderMapPanel();
   if (!formFilled) {
     if (tree && tree.spec) fillForm(tree.spec);
     else if (serverConfig) fillForm(serverConfig.defaults);
@@ -408,6 +510,16 @@ function applyFrame(buf) {
 }
 
 let frameCount = 0, producers = 0;
+
+// Two programs sending at once (e.g. a forgotten `treemap show-mapping` in a terminal
+// and the viewer's effects) make the LEDs flicker between their frames.
+function showSources(sources) {
+  const w = $("warn-src");
+  if (sources.length < 2) { w.style.display = "none"; return; }
+  w.innerHTML = `${sources.length} programs are sending colours at once, so the LEDs flicker between them:` +
+    `<ul>${sources.map((s) => `<li><code>${esc(s)}</code></li>`).join("")}</ul>Stop all but one (Ctrl-C in its terminal).`;
+  w.style.display = "block";
+}
 setInterval(() => {
   $("fps").textContent = producers ? `${frameCount} fps` : "idle";
   frameCount = 0;
@@ -428,8 +540,13 @@ function connect() {
   ws.onmessage = (ev) => {
     if (typeof ev.data === "string") {
       const msg = JSON.parse(ev.data);
-      if (msg.type === "reload") loadAll();
-      else if (msg.type === "status") producers = msg.producers;
+      if (msg.type === "reload") {
+        if (msg.what !== "scans") loadAll();
+        else if (!ledsBusy()) loadScans();  // during a scan: once at the end
+      }
+      else if (msg.type === "job") onJob(msg);
+      else if (msg.type === "job.rejected") setJobLine(jobTarget(lastJobKind), esc(msg.error), "bad");
+      else if (msg.type === "status") { producers = msg.producers; showSources(msg.sources || []); }
       else if (msg.type === "engine") onEngineState(msg);
       else if (msg.type === "effect.error") fxStatus(msg.error, "bad");
       else if (msg.type === "generated" && pending.has(msg.id)) {
@@ -603,6 +720,289 @@ function collapsible(panelId, toggleId, key) {
 }
 collapsible("gen", "gen-toggle", "treemap.genCollapsed");
 collapsible("fx", "fx-toggle", "treemap.fxCollapsed");
+collapsible("mp", "mp-toggle", "treemap.mpCollapsed");
+
+// ---------------------------------------------------------------- mapping panel
+// Shows tree_map.json's quality and drives the Mapping effects (map-status, map-verify)
+// and the single-LED highlight through the effects engine, so they light the real tree
+// too when the output is WLED.
+const PROBLEM_CHIPS = 80;
+const HIGHLIGHT = { color: "#0050ff", neighbours: true };
+let selectedLed = null;
+
+function mapStatus(i) { return map && map.status ? map.status[i] : null; }
+
+function renderMapPanel() {
+  const has = !!(map && map.status);
+  $("mp-empty").style.display = has ? "none" : "block";
+  $("mp-main").style.display = has ? "block" : "none";
+  $("mp-when").textContent = has && map.created ? new Date(map.created).toLocaleString() : "";
+  $("mp-eval").innerHTML = "";  // an evaluation of the previous map is stale
+  if (!has) { renderLedInfo(); return; }
+  const c = map.counts || {};
+  $("mp-counts").innerHTML = ["ok", "interpolated", "failed"].map((s) =>
+    `<span title="${s}"><i class="sw ${s}"></i>${c[s] ?? 0} ${s}</span>`).join("");
+
+  const box = $("mp-problems");
+  box.innerHTML = "";
+  const problems = map.status.flatMap((s, i) => (s === "ok" ? [] : [i]));
+  if (problems.length) {
+    const head = document.createElement("div");
+    head.className = "section";
+    head.textContent = "Problem LEDs · click to light one";
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    problems.slice(0, PROBLEM_CHIPS).forEach((i) => {
+      const b = document.createElement("button");
+      b.textContent = i;
+      b.className = map.status[i];
+      b.dataset.led = i;
+      b.title = `LED ${i}: ${map.status[i]}`;
+      b.onclick = () => selectLed(i);
+      chips.appendChild(b);
+    });
+    if (problems.length > PROBLEM_CHIPS) {
+      const more = document.createElement("span");
+      more.className = "muted";
+      more.textContent = `+${problems.length - PROBLEM_CHIPS} more`;
+      chips.appendChild(more);
+    }
+    box.append(head, chips);
+  }
+  renderLedInfo();
+  syncMapButtons();
+}
+
+function renderLedInfo() {
+  const el = $("mp-led");
+  const i = selectedLed;
+  if (i === null) { el.innerHTML = ""; return; }
+  const parts = [`<b>LED ${i}</b>`];
+  const st = mapStatus(i);
+  if (st) {
+    parts.push(st);
+    const views = map.views ? map.views[i] : null;
+    if (views !== null && views !== undefined) parts.push(`seen well in ${views} view${views === 1 ? "" : "s"}`);
+    if ((map.outliers || []).includes(i)) parts.push("dropped as an outlier");
+    if ((map.forced_interpolate || []).includes(i)) parts.push("interpolated on request");
+  }
+  let html = parts.join(" · ");
+  if (scans.length) {  // what each view saw of it
+    html += '<div class="dets">' + scans.map((s) => {
+      const e = s.leds[String(i)];
+      const what = !e ? "not scanned" : e.status === "missing" ? "not found"
+        : `${e.status} · ${e.confidence.toFixed(2)}`;
+      return `<span class="${e ? e.status : ""}">${s.angle}°: ${what}</span>`;
+    }).join("") + "</div>";
+  }
+  if (serverConfig && serverConfig.jobs && scans.length) {
+    const forced = map && (map.forced_interpolate || []).includes(i);
+    html += `<div class="row">
+      <button data-fix="rescan" title="Photograph this LED again from every scanned angle, then rebuild the map">Rescan</button>
+      ${forced
+        ? '<button data-fix="measure" title="Use its detections again, then rebuild the map">Measure again</button>'
+        : '<button data-fix="interpolate" title="Ignore its detections from now on and fill it in from its neighbours">Interpolate</button>'}
+    </div>`;
+  }
+  el.innerHTML = html;
+  el.querySelectorAll("[data-fix]").forEach((b) => {
+    b.disabled = jobActive();
+    b.onclick = () => startJob(b.dataset.fix, { index: i });
+  });
+}
+
+function selectLed(i) {
+  selectedLed = i;
+  renderLedInfo();
+  if (ledsBusy()) return;  // a scan is using the LEDs
+  if (send({ type: "effect.run", effect: "led", params: { index: i, ...HIGHLIGHT } })) fxStatus("");
+}
+
+function syncMapButtons() {
+  ["mp-status", "mp-verify"].forEach((id) =>
+    $(id).classList.toggle("running", engine.running === $(id).dataset.effect));
+  const lit = engine.running === "led" && engine.params ? engine.params.index : null;
+  document.querySelectorAll("#mp-problems button").forEach((b) =>
+    b.classList.toggle("running", Number(b.dataset.led) === lit));
+}
+
+$("mp-status").onclick = () => runEffect("map-status");
+$("mp-verify").onclick = () => runEffect("map-verify");
+$("mp-evaluate").onclick = () => startJob("evaluate");
+
+function renderEval(r) {
+  const h = r.height_m * 100;
+  const fmt = (f) => `${(f * 100).toFixed(2)}% · ${(f * h).toFixed(1)} cm`;
+  const rows = r.rows.filter((x) => x.count).map((x) =>
+    `<tr><td>${x.status}</td><td class="n">${x.count}</td><td class="n">${fmt(x.median)}</td><td class="n">${fmt(x.p95)}</td></tr>`).join("");
+  $("mp-eval").innerHTML = `<div class="section">Error vs the simulated tree</div>
+    <table class="res"><thead><tr><th></th><th class="n">LEDs</th><th class="n">median</th><th class="n">p95</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="muted" style="font-size: 11px; margin-top: 3px">after aligning: rotated ${r.rotation_deg}°, scale ${r.scale}; % of the ${r.height_m} m LED height</div>`;
+}
+
+// ---------------------------------------------------------------- scan panel and jobs
+// Long-running work (scan, reconstruct, evaluate, fixing one LED) runs as a job on the
+// server, one at a time; its state arrives as {"type": "job"} messages.
+let scans = [];                       // /api/scans: per angle counts, detections, images
+let job = { status: "idle" };
+let lastJobKind = null;
+const LED_JOBS = ["scan", "rescan"];  // these light the LEDs; effects wait meanwhile
+const SCAN_PANEL_JOBS = ["scan", "reconstruct"];
+const jobActive = () => job.status === "running" || job.status === "waiting";
+const ledsBusy = () => jobActive() && LED_JOBS.includes(job.kind);
+const jobTarget = (kind) => (SCAN_PANEL_JOBS.includes(kind) ? "sc" : "mp");
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function loadScans() {
+  scans = (await fetchJson("/api/scans")) || [];
+  renderScans();
+  renderLedInfo();
+}
+
+function renderScans() {
+  $("sc-rows").innerHTML = scans.map((s) =>
+    `<tr><td>${s.angle}°</td><td class="n">${s.counts.ok}</td><td class="n">${s.counts.weak}</td><td class="n">${s.counts.missing}</td></tr>`).join("");
+  $("sc-table").style.display = scans.length ? "" : "none";
+  $("sc-thumbs").innerHTML = scans.filter((s) => s.images.debug).map((s) => {
+    const url = `/api/scan-image/${s.images.debug.name}?v=${s.images.debug.stamp}`;
+    return `<a href="${url}" target="_blank" rel="noopener" title="Debug image at ${s.angle}°: detections on the long exposure">` +
+      `<img src="${url}" alt="Debug image at ${s.angle}°" loading="lazy">${s.angle}°</a>`;
+  }).join("");
+  const n = serverConfig ? serverConfig.led_count : 0;
+  if (!scans.length || !n) { $("sc-cover").textContent = scans.length ? "" : "No scans yet."; return; }
+  const seen = new Uint16Array(n);
+  scans.forEach((s) => {
+    if (s.led_count !== n) return;
+    for (const [k, e] of Object.entries(s.leds)) if (e.status === "ok") seen[+k]++;
+  });
+  let two = 0, none = 0;
+  seen.forEach((c) => { if (c >= 2) two++; if (c === 0) none++; });
+  $("sc-cover").textContent = `${two}/${n} LEDs found in 2+ views · ${none} in none`;
+}
+
+function setJobLine(target, html, kind = "") {
+  const el = $(`${target}-job`);
+  el.innerHTML = html;
+  el.className = `jobline ${kind}`;
+}
+
+function startJob(kind, params = {}) {
+  lastJobKind = kind;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    setJobLine(jobTarget(kind), "Not connected to the server. Is `treemap sim view` running?", "bad");
+    return;
+  }
+  setJobLine(jobTarget(kind), "Starting…");
+  ws.send(JSON.stringify({ type: "job.start", job: kind, params }));
+}
+
+function jobRunningText(st) {
+  if (st.message) return st.message;
+  const p = st.progress;
+  const what = st.kind === "scan" ? "Scanning" : `Rescanning LED ${st.params.index}`;
+  if (LED_JOBS.includes(st.kind)) {
+    let text = p ? `${what} at ${p.angle}°: LED ${p.led} (${p.done}/${p.total})` : `${what}…`;
+    if (st.angles.length) text += ` · done ${st.angles.map((a) => `${a.angle}°`).join(", ")}`;
+    return text;
+  }
+  return { reconstruct: "Reconstructing…", evaluate: "Evaluating…",
+    interpolate: `Interpolating LED ${st.params.index}…`,
+    measure: `Measuring LED ${st.params.index} again…` }[st.kind] || "Working…";
+}
+
+function jobDoneText(st) {
+  const r = st.result || {};
+  if (st.kind === "scan") {
+    const c = r.coverage;
+    return c ? `Scan finished: ${c.two_plus}/${c.led_count} LEDs found in 2+ views. Next: Reconstruct.` : "Scan finished.";
+  }
+  if (st.kind === "reconstruct") {
+    const c = r.counts;
+    const off = r.angle_offsets.slice(1).map((o) => `${o > 0 ? "+" : ""}${o.toFixed(1)}°`).join(", ");
+    return `Map rebuilt: ${c.ok} ok · ${c.interpolated} interpolated · ${c.failed} failed. ` +
+      `Reprojection error ${r.median_residual_px.toFixed(2)} px; angle errors after the first: ${off || "–"}.`;
+  }
+  if (st.kind === "evaluate") return "";
+  return `Map rebuilt: LED ${r.index} is now ${r.status}.`;
+}
+
+function onJob(st) {
+  const was = jobActive();
+  job = st;
+  const active = jobActive();
+  ["sc-start", "sc-recon", "mp-evaluate"].forEach((id) => { $(id).disabled = active || !serverConfig?.jobs; });
+  $("sc-stop").disabled = !active;
+  document.querySelectorAll("#mp-led [data-fix]").forEach((b) => { b.disabled = active; });
+  for (const t of ["sc", "mp"]) {
+    const box = $(`${t}-prompt`);
+    const show = st.status === "waiting" && jobTarget(st.kind) === t;
+    box.classList.toggle("on", show);
+    box.querySelector("span").textContent = show ? st.prompt : "";
+  }
+  if (!st.kind) return;
+  const target = jobTarget(st.kind);
+  if (active) {
+    const p = st.progress;
+    const bar = LED_JOBS.includes(st.kind) && p
+      ? `<div class="bar"><i style="width: ${(100 * p.done / p.total).toFixed(1)}%"></i></div>` : "";
+    setJobLine(target, esc(jobRunningText(st)) + bar);
+  } else if (st.status === "error") {
+    setJobLine(target, esc(st.error), "bad");
+  } else if (st.status === "cancelled") {
+    setJobLine(target, st.kind === "scan" ? "Stopped; progress was saved. Scan again to resume." : "Stopped.");
+  } else if (st.status === "done") {
+    if (st.kind === "evaluate") renderEval(st.result);
+    setJobLine(target, esc(jobDoneText(st)), "good");
+  }
+  if (was && !active) loadScans();
+}
+
+$("sc-start").onclick = () => {
+  const text = $("sc-angles").value.trim();
+  const angles = text ? text.split(/[\s,]+/).filter(Boolean).map(Number) : [];
+  if (angles.some((a) => !Number.isFinite(a))) {
+    setJobLine("sc", "Angles must be numbers, e.g. 0, 90, 180, 270.", "bad");
+    return;
+  }
+  const fresh = $("sc-fresh").checked;
+  if (fresh && !confirm("Discard the earlier results for these angles and scan them from scratch?")) return;
+  startJob("scan", { angles, leds: $("sc-leds").value.trim() || null, fresh });
+};
+$("sc-recon").onclick = () => startJob("reconstruct");
+$("sc-stop").onclick = () => send({ type: "job.cancel" });
+document.querySelectorAll(".prompt [data-act]").forEach((b) => {
+  b.onclick = () => send({ type: b.dataset.act === "continue" ? "job.continue" : "job.cancel" });
+});
+collapsible("sc", "sc-toggle", "treemap.scCollapsed");
+
+function setupScanPanel() {
+  const cfg = serverConfig && serverConfig.config;
+  const jobsOk = !!(serverConfig && serverConfig.jobs);
+  if (cfg) {
+    $("sc-angles").value = cfg.scan.angles.join(", ");
+    $("sc-cam").textContent = `camera ${cfg.camera.type} · profile ${cfg.scan.profile}`;
+    $("mp-evaluate").style.display = cfg.camera.type === "sim" ? "" : "none";
+    $("cfg-view").textContent =
+      `# ${serverConfig.config_source || "built-in defaults (no config.yaml)"}\n` + yamlish(cfg).trimStart();
+  } else {
+    $("t-cfg").style.display = "none";
+  }
+  if (!jobsOk) setJobLine("sc", "Scanning isn't available from this server.", "bad");
+  ["sc-start", "sc-recon", "mp-evaluate"].forEach((id) => { $(id).disabled = !jobsOk; });
+  $("sc-stop").disabled = true;
+}
+
+// A readable, YAML-like dump of the config.
+function yamlish(v, ind = "") {
+  if (Array.isArray(v)) {
+    if (v.every((x) => x === null || typeof x !== "object")) return `[${v.join(", ")}]`;
+    return v.map((x) => `\n${ind}- ` + yamlish(x, ind + "  ").trimStart()).join("");
+  }
+  if (v && typeof v === "object") return Object.entries(v).map(([k, x]) => `\n${ind}${k}: ${yamlish(x, ind + "  ")}`).join("");
+  return v === null ? "null" : String(v);
+}
+$("t-cfg").onclick = () => { $("cfg-view").classList.toggle("on"); $("t-cfg").classList.toggle("active"); };
 
 // ---------------------------------------------------------------- effects panel
 let effects = [];               // descriptions from /api/effects
@@ -645,7 +1045,8 @@ function buildEffects(info) {
     return;
   }
   $("fx-out").textContent = `→ ${info.output}`;
-  const groups = [...new Set(effects.map((e) => e.group))];
+  // The Mapping effects live in their own panel.
+  const groups = [...new Set(effects.map((e) => e.group))].filter((g) => g !== "Mapping");
   for (const g of groups) {
     const head = document.createElement("div");
     head.className = "section";
@@ -753,6 +1154,7 @@ function onEngineState(st) {
     $("fx-bright-val").textContent = `${bright.value}%`;
   }
   $("fx-stop").disabled = !st.running;
+  syncMapButtons();
   if (st.error) fxStatus(st.error, "bad");
   else if (st.running) fxStatus(`Running ${desc ? desc.label : st.running}`);
   else if (!$("fx-status").classList.contains("bad")) fxStatus("Stopped");
@@ -795,6 +1197,17 @@ let hoverEvent = null;
 renderer.domElement.addEventListener("pointermove", (e) => { hoverEvent = e; });
 renderer.domElement.addEventListener("pointerleave", () => { hoverEvent = null; $("tip").style.display = "none"; });
 
+// Click (not drag) an LED: light it blue with its neighbours and show its mapping.
+let downAt = null;
+renderer.domElement.addEventListener("pointerdown", (e) => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener("pointerup", (e) => {
+  if (!downAt || !points || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  mouse.set((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(mouse, camera);
+  const hit = raycaster.intersectObject(points)[0];
+  if (hit) selectLed(hit.index);
+});
+
 function updateHover() {
   const tip = $("tip");
   if (!hoverEvent || !points) { tip.style.display = "none"; return; }
@@ -805,7 +1218,8 @@ function updateHover() {
   const i = hit.index;
   const strip = tree ? tree.strands.findIndex((s) => i >= s.start && i < s.start + s.count) : -1;
   const rgb = [0, 1, 2].map((k) => Math.round(colors[i * 3 + k] * 255)).join(", ");
-  tip.textContent = `#${i}${strip >= 0 ? ` · strip ${strip + 1}` : ""} · rgb(${rgb})`;
+  const st = mapStatus(i);
+  tip.textContent = `#${i}${strip >= 0 ? ` · strip ${strip + 1}` : ""}${st ? ` · ${st}` : ""} · rgb(${rgb})`;
   tip.style.left = `${hoverEvent.clientX + 14}px`;
   tip.style.top = `${hoverEvent.clientY + 14}px`;
   tip.style.display = "block";
@@ -831,7 +1245,9 @@ renderer.setAnimationLoop(() => {
   fetchJson("/api/config"),
   fetchJson("/api/effects").then(buildEffects),
 ]);
+setupScanPanel();
 await loadAll();
+await loadScans();
 connect();
 </script>
 </body>

@@ -7,6 +7,7 @@ rejected (so a typo doesn't silently do nothing), and values are validated on lo
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import MISSING, asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -73,6 +74,8 @@ class SimConfig:
     radius: float | None = None
     layout: str = "auto"
     quirks: bool = True
+    hidden_leds: str | None = None  # e.g. "57, 120-127": never seen by the sim camera
+    occlusion: float = 0.8  # 0-1: how much foliage hides LEDs away from the sim camera
     tree_file: str = "data/sim_tree.json"
     host: str = "127.0.0.1"
     port: int = 8765
@@ -112,6 +115,10 @@ class Config:
     @property
     def sim_tree_path(self) -> Path:
         return self.resolve(self.sim.tree_file)
+
+    @property
+    def sim_hidden_leds(self) -> list[int]:
+        return parse_leds(str(self.sim.hidden_leds), self.led_count) if self.sim.hidden_leds else []
 
     def to_dict(self) -> dict[str, Any]:
         """The config as plain data, without the non-key fields."""
@@ -178,6 +185,12 @@ class Config:
             if getattr(sim, key) is not None:
                 _check_number(f"sim.{key}", getattr(sim, key))
         _check_bool("sim.quirks", sim.quirks)
+        _check_number("sim.occlusion", sim.occlusion, minimum=0, maximum=1)
+        if sim.hidden_leds is not None:
+            try:
+                parse_leds(str(sim.hidden_leds), self.led_count)
+            except ValueError as e:
+                raise ConfigError(f"sim.hidden_leds: {e}") from None
         if sim.strips is not None:
             total = sum(st.leds for st in sim.strips)
             if total != self.led_count:
@@ -195,6 +208,23 @@ class Config:
         if not isinstance(self.sim.host, str) or not self.sim.host:
             raise ConfigError("sim.host must be a non-empty string")
         _check_int("sim.port", self.sim.port, minimum=1, maximum=65535)
+
+
+def parse_leds(text: str, led_count: int) -> list[int]:
+    """``"120-140"``, ``"5"`` or ``"1-3,7,10-12"`` (inclusive) as sorted indices."""
+    out: set[int] = set()
+    for part in text.split(","):
+        m = re.fullmatch(r"\s*(\d+)\s*(?:-\s*(\d+)\s*)?", part)
+        if not m:
+            raise ValueError(f"{text!r}: expected ranges like 120-140 or 1-3,7,10-12")
+        a = int(m[1])
+        b = int(m[2]) if m[2] is not None else a
+        if a > b:
+            raise ValueError(f"{part.strip()!r}: range runs backwards")
+        if b >= led_count:
+            raise ValueError(f"{part.strip()!r}: LEDs go up to {led_count - 1}")
+        out.update(range(a, b + 1))
+    return sorted(out)
 
 
 def find_config_path(explicit: str | Path | None = None) -> Path | None:

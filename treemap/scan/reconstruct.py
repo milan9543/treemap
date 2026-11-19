@@ -58,7 +58,9 @@ class Observations:
     led_count: int
 
     @classmethod
-    def from_scans(cls, scans: list[AngleScan], led_count: int) -> Observations:
+    def from_scans(
+        cls, scans: list[AngleScan], led_count: int, exclude: set[int] = frozenset()
+    ) -> Observations:
         led, view, uv, conf = [], [], [], []
         for k, s in enumerate(scans):
             if s.led_count != led_count:
@@ -66,6 +68,8 @@ class Observations:
                     f"angle {s.angle:g} was scanned with {s.led_count} LEDs, not {led_count}"
                 )
             for i in s.ok_indices():
+                if i in exclude:
+                    continue
                 e = s.leds[i]
                 led.append(i)
                 view.append(k)
@@ -94,9 +98,14 @@ class Reconstruction:
     info: dict = field(default_factory=dict)
 
 
-def build_map(scans: list[AngleScan], led_count: int) -> tuple[TreeMap, Reconstruction]:
-    """Scans -> reconstruction -> cleanup -> normalised :class:`TreeMap`."""
-    rec = reconstruct(scans, led_count)
+def build_map(
+    scans: list[AngleScan], led_count: int, interpolate: set[int] = frozenset()
+) -> tuple[TreeMap, Reconstruction]:
+    """Scans -> reconstruction -> cleanup -> normalised :class:`TreeMap`.
+
+    LEDs in ``interpolate`` ignore their detections and are filled from neighbours.
+    """
+    rec = reconstruct(scans, led_count, exclude=interpolate)
     try:
         P, status, info = cleanup(rec.positions)
         P = normalise(P, status)
@@ -109,15 +118,18 @@ def build_map(scans: list[AngleScan], led_count: int) -> tuple[TreeMap, Reconstr
         "focal_px": round(rec.focal, 1),
         "median_residual_px": rec.info["median_residual_px"],
         "outliers": info["outliers"],
+        "forced_interpolate": sorted(interpolate),
         "views": rec.views.tolist(),
     }
     return TreeMap(P, status, meta), rec
 
 
-def reconstruct(scans: list[AngleScan], led_count: int) -> Reconstruction:
+def reconstruct(
+    scans: list[AngleScan], led_count: int, exclude: set[int] = frozenset()
+) -> Reconstruction:
     if len(scans) < 2:
         raise ReconstructionError("need scans from at least two view angles")
-    obs = Observations.from_scans(scans, led_count)
+    obs = Observations.from_scans(scans, led_count, exclude)
     if len(obs.led) == 0:
         raise ReconstructionError("the scans have no ok detections")
 

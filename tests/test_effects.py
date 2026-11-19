@@ -11,12 +11,22 @@ from treemap.effects import (
     get_effect,
 )
 from treemap.effects.base import hsv_to_rgb
+from treemap.mapping.model import TreeMap
 
 N = 120
 
 
+def _helix_map(n):
+    t = np.linspace(0, 1, n)
+    P = np.stack([0.3 * (1 - t) * np.cos(30 * t), t, 0.3 * (1 - t) * np.sin(30 * t)], axis=1)
+    status = np.array(["ok"] * n, dtype="<U12")
+    status[::7] = "interpolated"
+    return TreeMap(P, status)
+
+
 def ctx(n=N, seed=1):
-    return EffectContext(n=n, rng=np.random.default_rng(seed))
+    tree_map = _helix_map(n)
+    return EffectContext(n=n, rng=np.random.default_rng(seed), tree_map=lambda: tree_map)
 
 
 @pytest.mark.parametrize("name", effect_names())

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
 from contextlib import ExitStack
+from urllib.parse import quote
 
 import numpy as np
 from websockets.exceptions import ConnectionClosed, InvalidHandshake, InvalidURI
@@ -17,6 +20,12 @@ log = logging.getLogger(__name__)
 OUTPUT_PATH = "/ws/output"
 
 
+def default_source() -> str:
+    """This program as the viewer should name it, e.g. ``treemap show-mapping (pid 123)``."""
+    args = [a for a in sys.argv[1:] if not a.startswith("-")][:3]
+    return f"treemap {' '.join(args)}".strip() + f" (pid {os.getpid()})"
+
+
 class SimOutput(LedOutput):
     """Sends each frame as raw RGB bytes to ``ws://host:port/ws/output``.
 
@@ -26,10 +35,13 @@ class SimOutput(LedOutput):
     """
 
     def __init__(
-        self, led_count: int, host: str = "127.0.0.1", port: int = 8765, retry_s: float = 2.0
+        self, led_count: int, host: str = "127.0.0.1", port: int = 8765, retry_s: float = 2.0,
+        source: str | None = None,
     ) -> None:
         super().__init__(led_count)
-        self.url = f"ws://{host}:{port}{OUTPUT_PATH}"
+        # Shown in the viewer when several programs send frames at once.
+        self.source = source or default_source()
+        self.url = f"ws://{host}:{port}{OUTPUT_PATH}?source={quote(self.source)}"
         self.retry_s = retry_s
         self.last_frame = np.zeros((led_count, 3), dtype=np.uint8)
         self._ws: ClientConnection | None = None

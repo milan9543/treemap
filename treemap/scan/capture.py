@@ -19,7 +19,6 @@ goes, so an interrupted scan resumes where it stopped. Alongside it:
 from __future__ import annotations
 
 import json
-import re
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -114,21 +113,20 @@ def load_scans(scan_dir: Path) -> list[AngleScan]:
     return sorted(scans, key=lambda s: s.angle % 360)
 
 
-def parse_leds(text: str, led_count: int) -> list[int]:
-    """``"120-140"``, ``"5"`` or ``"1-3,7,10-12"`` (inclusive) as sorted indices."""
-    out: set[int] = set()
-    for part in text.split(","):
-        m = re.fullmatch(r"\s*(\d+)\s*(?:-\s*(\d+)\s*)?", part)
-        if not m:
-            raise ValueError(f"{text!r}: expected ranges like 120-140 or 1-3,7,10-12")
-        a = int(m[1])
-        b = int(m[2]) if m[2] is not None else a
-        if a > b:
-            raise ValueError(f"{part.strip()!r}: range runs backwards")
-        if b >= led_count:
-            raise ValueError(f"{part.strip()!r}: LEDs go up to {led_count - 1}")
-        out.update(range(a, b + 1))
-    return sorted(out)
+OVERRIDES_FILE = "overrides.json"
+
+
+def load_overrides(scan_dir: Path) -> set[int]:
+    """LEDs marked (with ``treemap fix``) to be interpolated instead of measured."""
+    path = scan_dir / OVERRIDES_FILE
+    if not path.exists():
+        return set()
+    return {int(i) for i in json.loads(path.read_text()).get("interpolate", [])}
+
+
+def save_overrides(scan_dir: Path, interpolate: set[int]) -> None:
+    scan_dir.mkdir(parents=True, exist_ok=True)
+    (scan_dir / OVERRIDES_FILE).write_text(json.dumps({"interpolate": sorted(interpolate)}))
 
 
 def _entry(det: Detection | None, min_confidence: float) -> dict[str, Any]:

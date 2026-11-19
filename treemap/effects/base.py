@@ -11,6 +11,7 @@ frame rather than caching values in ``setup``.
 from __future__ import annotations
 
 import colorsys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -117,6 +118,8 @@ class EffectContext:
     fps: float = 40.0  # nominal frame rate, for effects that step per frame
     positions: np.ndarray | None = None  # (n, 3) map, once position-aware effects arrive
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
+    # Returns the current tree map (or None); see treemap.mapping.model.MapFile.
+    tree_map: Callable[[], Any] | None = None
 
 
 class Effect:

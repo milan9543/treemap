@@ -93,13 +93,16 @@ def cleanup(positions: np.ndarray) -> tuple[np.ndarray, np.ndarray, dict]:
             out[i] = (1 - t) * P[j] + t * P[m]
             if m - j - 1 <= MAX_GAP:
                 status[i] = "interpolated"
-        else:  # strip end or a break between strips: copy the nearer good LED (a guess
-            # unless it is the very next one)
-            if j is not None and m is not None:
+        else:  # a break (between strips, or a wrong LED at one end) or the strip's end:
+            # copy the nearer good LED. Only at the very end of the strip, and only for
+            # the next LED, is that reliable; inside a break we can't tell which side
+            # each LED belongs to.
+            at_end = j is None or m is None
+            if not at_end:
                 j, m = (j, None) if i - j <= m - i else (None, m)
             near = j if j is not None else m
             out[i] = P[near]
-            if abs(i - near) == 1:
+            if at_end and abs(i - near) == 1:
                 status[i] = "interpolated"
     info = {"pitch": pitch, "outliers": np.flatnonzero(outliers).tolist()}
     return out, status, info

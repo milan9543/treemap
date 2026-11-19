@@ -48,6 +48,10 @@ sim:
   radius: null         # metres at the base; null = random 0.5-0.8
   layout: auto         # interleaved | stacked | auto (auto = sometimes stacked, if quirks)
   quirks: true         # let "auto" settings pick wiring quirks at random
+  occlusion: 0.8       # 0-1: how much foliage hides LEDs not facing the sim camera
+                       # (0 = see-through tree, 1 = the back of the tree is hidden)
+  hidden_leds: null    # LEDs the sim camera never sees, e.g. "57, 120-127", to try out
+                       # show-mapping and fix on bad LEDs
   tree_file: data/sim_tree.json
   host: 127.0.0.1
   port: 8765

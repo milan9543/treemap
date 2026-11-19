@@ -37,7 +37,8 @@ def create_camera(cfg: Config, output: LedOutput | None = None) -> Camera:
                 f"the simulated tree has {tree.led_count} LEDs but led_count is "
                 f"{output.led_count}; run `treemap sim new`"
             )
-        return SimCamera(tree, lambda: output.last_frame)
+        return SimCamera(tree, lambda: output.last_frame, hidden=cfg.sim_hidden_leds,
+                         occlusion=cfg.sim.occlusion)
     if cfg.camera.type == "android":
         raise NotImplementedError("the Android camera arrives in Batch 9; use `camera: sim`")
     raise ValueError(f"unknown camera {cfg.camera.type!r}")

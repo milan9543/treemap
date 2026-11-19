@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import threading
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 
 import numpy as np
 
@@ -87,6 +89,26 @@ def play(
             time.sleep(delay)
         else:
             deadline = time.perf_counter()  # fell behind; don't try to catch up
+
+
+@contextlib.contextmanager
+def showing(output: LedOutput, frame: np.ndarray, refresh_s: float = 1.0) -> Iterator[None]:
+    """Keep ``frame`` on the LEDs in the background (e.g. while waiting for input)."""
+    stop = threading.Event()
+
+    def run() -> None:
+        while True:
+            output.show(frame)
+            if stop.wait(refresh_s):
+                return
+
+    thread = threading.Thread(target=run, name="showing", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join()
 
 
 def hold(

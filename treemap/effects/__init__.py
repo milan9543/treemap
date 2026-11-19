@@ -1,6 +1,6 @@
 """Effects: importing this package registers every built-in effect."""
 
-from treemap.effects import classic, diagnostics  # noqa: F401  (registers the effects)
+from treemap.effects import classic, diagnostics, mapping  # noqa: F401  (registers them)
 from treemap.effects.base import Effect, EffectContext, Param, ParamError
 from treemap.effects.registry import (
     create_effect,

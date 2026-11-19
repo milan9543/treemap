@@ -2,7 +2,7 @@
 name = "treemap"
 version = "0.1.0"
 description = "3D/2D mapping and position-aware effects for a WLED Christmas tree"
-readme = "ROADMAP.md"
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",

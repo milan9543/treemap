@@ -234,3 +234,18 @@ def test_sim_output_without_server_keeps_frames():
     out.off()  # retry is throttled: no second slow connect attempt, no error
     assert not out.last_frame.any()
     out.close()
+
+
+def test_viewer_is_told_who_is_sending(server):
+    with connect(f"ws://127.0.0.1:{server.port}/ws/viewer") as viewer:
+        a = SimOutput(10, port=server.port, source="viewer: effects")
+        b = SimOutput(10, port=server.port)  # defaults to this program's command line
+        a.off()
+        b.off()
+        msg = recv_until(viewer, lambda m: isinstance(m, str) and '"producers": 2' in m)
+        sources = json.loads(msg)["sources"]
+        assert "viewer: effects" in sources
+        assert any(s.startswith("treemap") and "pid" in s for s in sources)
+        b.close()
+        recv_until(viewer, lambda m: isinstance(m, str) and '"producers": 1' in m)
+        a.close()

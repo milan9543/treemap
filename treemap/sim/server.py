@@ -6,17 +6,22 @@ HTTP routes:
     /api/tree    the simulator ground truth (sim_tree.json), 404 if not generated yet
     /api/map     the reconstructed map (tree_map.json), 404 if not scanned yet
     /api/effects the effects the engine can run, with their parameters
+    /api/scans   the saved scans: per angle counts, detections and debug images
+    /api/scan-image/<name>  one of those images (angle_XXX_debug.png etc.)
 Websockets:
     /ws/output   producers (``SimOutput``) send binary frames of led_count × RGB bytes
-    /ws/viewer   browsers receive those frames, plus JSON ``{"type": "reload"}`` messages
-                 when the tree or map file changes on disk, and ``{"type": "engine"}``
-                 state whenever the effects engine changes. Browsers may send:
+    /ws/viewer   browsers receive those frames, plus JSON ``{"type": "reload", "what"}``
+                 messages when the tree, map or scans change on disk, ``{"type":
+                 "engine"}`` state whenever the effects engine changes and ``{"type":
+                 "job"}`` state for background jobs. Browsers may send:
                    {"type": "generate", "id", "spec"}  -> {"type": "generated", "id", "ok", ...}
                    {"type": "effect.run", "effect", "params"}
                    {"type": "effect.params", "params"}
                    {"type": "effect.brightness", "value"}
                    {"type": "effect.stop"}
-                 Rejected effect requests get {"type": "effect.error", "error"} back.
+                   {"type": "job.start", "job", "params"}  (see treemap.jobs)
+                   {"type": "job.cancel"}, {"type": "job.continue"}
+                 Rejected requests get {"type": "effect.error" | "job.rejected", "error"}.
 (The websockets HTTP layer only accepts GET, hence commands go over the websocket.)
 
 The effects engine runs in this process and sends its frames through an ordinary
@@ -36,15 +41,18 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from importlib import resources
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from websockets.asyncio.server import ServerConnection, broadcast, serve
 from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
+from treemap import workflow
+from treemap.config import Config
 from treemap.effects import ParamError, describe_effects
 from treemap.engine import Engine
+from treemap.jobs import JobRejected, Jobs
 from treemap.sim.tree import (
     HEIGHT_RANGE,
     LIMITS,
@@ -71,11 +79,17 @@ class SimServer:
     # None disables effects in the viewer.
     make_engine: Callable[[SimServer], Engine] | None = None
     output_label: str = "sim"  # where the engine's frames go, shown in the viewer
+    # The config, for scans, jobs and the config view. None: those are unavailable.
+    cfg: Config | None = None
+    # Builds the background job runner once the port is known. None disables jobs.
+    make_jobs: Callable[[SimServer], Jobs] | None = None
 
     viewers: set[ServerConnection] = field(default_factory=set, init=False)
     producers: int = field(default=0, init=False)
+    sources: dict[ServerConnection, str] = field(default_factory=dict, init=False)
     last_frame: bytes | None = field(default=None, init=False)
     engine: Engine | None = field(default=None, init=False)
+    jobs: Jobs | None = field(default=None, init=False)
     _generate_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
 
@@ -94,8 +108,22 @@ class SimServer:
                 "defaults": self.defaults.to_dict(),
                 "limits": LIMITS,
                 "random": {"height": HEIGHT_RANGE, "radius": RADIUS_RANGE, "spacing": PITCH_RANGE},
+                "jobs": self.jobs is not None,
             }
+            if self.cfg is not None:
+                body["config"] = self.cfg.to_dict()
+                body["config_source"] = str(self.cfg.source) if self.cfg.source else None
+                body["scan_dir"] = str(self.cfg.scan_dir)
             return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
+        if path == "/api/scans":
+            if self.cfg is None:
+                return _response(HTTPStatus.NOT_FOUND, b"[]", "application/json")
+            body = json.dumps(workflow.scan_index(self.cfg)).encode()
+            return _response(HTTPStatus.OK, body, "application/json")
+        if path.startswith("/api/scan-image/") and self.cfg is not None:
+            image = workflow.scan_image_path(self.cfg, path.rsplit("/", 1)[1])
+            if image is not None:
+                return _response(HTTPStatus.OK, image.read_bytes(), "image/png")
         if path == "/api/effects":
             body = {
                 "available": self.engine is not None,
@@ -124,9 +152,11 @@ class SimServer:
         self.viewers.add(ws)
         log.info("viewer connected (%d open)", len(self.viewers))
         try:
-            await ws.send(json.dumps({"type": "status", "producers": self.producers}))
+            await ws.send(json.dumps(self._status()))
             if self.engine is not None:
                 await ws.send(json.dumps(self._engine_state()))
+            if self.jobs is not None:
+                await ws.send(json.dumps({"type": "job", **self.jobs.state()}))
             if self.last_frame is not None:
                 await ws.send(self.last_frame)
             async for message in ws:
@@ -147,12 +177,44 @@ class SimServer:
             await self._generate(ws, msg)
         elif isinstance(kind, str) and kind.startswith("effect."):
             await self._effect_command(ws, kind, msg)
+        elif isinstance(kind, str) and kind.startswith("job."):
+            await self._job_command(ws, kind, msg)
+
+    async def _job_command(self, ws: ServerConnection, kind: str, msg: dict) -> None:
+        jobs = self.jobs
+        try:
+            if jobs is None:
+                raise JobRejected("jobs are not available in this viewer")
+            if kind == "job.start":
+                jobs.start(str(msg.get("job")), msg.get("params") or {})
+            elif kind == "job.cancel":
+                jobs.cancel()
+            elif kind == "job.continue":
+                jobs.proceed()
+            else:
+                raise JobRejected(f"unknown command {kind!r}")
+        except JobRejected as e:
+            with contextlib.suppress(ConnectionClosed):
+                await ws.send(json.dumps({"type": "job.rejected", "error": str(e)}))
+
+    def _jobs_changed(self, state: dict) -> None:
+        """Called from the job thread: broadcast its state from the event loop."""
+        if self._loop is not None and not self._loop.is_closed():
+            self._loop.call_soon_threadsafe(lambda: self._broadcast_json({"type": "job", **state}))
+
+    def _leds_busy(self) -> str | None:
+        if self.jobs is not None and self.jobs.uses_leds:
+            return f"a {self.jobs.state()['kind']} is using the LEDs; stop it first"
+        return None
 
     async def _effect_command(self, ws: ServerConnection, kind: str, msg: dict) -> None:
         engine = self.engine
         try:
             if engine is None:
                 raise LookupError("effects are not available in this viewer")
+            busy = self._leds_busy()
+            if busy and kind in ("effect.run", "effect.params"):
+                raise LookupError(busy)
             params = msg.get("params") or {}
             if not isinstance(params, dict):
                 raise ParamError("params must be an object")
@@ -187,6 +249,8 @@ class SimServer:
     async def _generate(self, ws: ServerConnection, msg: dict) -> None:
         reply: dict = {"type": "generated", "id": msg.get("id")}
         try:
+            if self.jobs is not None and self.jobs.busy:
+                raise SpecError(f"a {self.jobs.state()['kind']} is running; wait or stop it first")
             spec = TreeSpec.from_dict(msg.get("spec"))
             async with self._generate_lock:
                 tree = await asyncio.to_thread(generate_tree, spec)
@@ -202,9 +266,17 @@ class SimServer:
         with contextlib.suppress(ConnectionClosed):  # page closed while generating
             await ws.send(json.dumps(reply))
 
+    def _status(self) -> dict:
+        """Who is sending frames. More than one at a time makes the LEDs flicker between
+        them, so the viewer warns about it."""
+        return {"type": "status", "producers": self.producers,
+                "sources": sorted(self.sources.values())}
+
     async def _producer(self, ws: ServerConnection) -> None:
+        query = parse_qs(urlsplit(ws.request.path).query) if ws.request else {}
+        self.sources[ws] = (query.get("source") or ["unnamed sender"])[0][:100]
         self.producers += 1
-        self._broadcast_json({"type": "status", "producers": self.producers})
+        self._broadcast_json(self._status())
         try:
             async for message in ws:
                 if isinstance(message, bytes):
@@ -212,22 +284,25 @@ class SimServer:
                     broadcast(self.viewers, message)
         finally:
             self.producers -= 1
-            self._broadcast_json({"type": "status", "producers": self.producers})
+            self.sources.pop(ws, None)
+            self._broadcast_json(self._status())
 
     def _broadcast_json(self, msg: dict) -> None:
         broadcast(self.viewers, json.dumps(msg))
 
     async def _watch_files(self) -> None:
-        """Tell viewers to reload when the tree or map file is (re)written."""
-        seen = {p: _mtime(p) for p in (self.tree_path, self.map_path)}
+        """Tell viewers to reload when the tree, map or scans are (re)written."""
+        stamps = {"tree": lambda: _mtime(self.tree_path), "map": lambda: _mtime(self.map_path)}
+        if self.cfg is not None:
+            stamps["scans"] = lambda: _dir_stamp(self.cfg.scan_dir)
+        seen = {what: stamp() for what, stamp in stamps.items()}
         while True:
             await asyncio.sleep(self.poll_s)
-            for p, old in seen.items():
-                new = _mtime(p)
-                if new != old:
-                    seen[p] = new
-                    what = "tree" if p == self.tree_path else "map"
-                    log.info("%s file changed, reloading viewers", what)
+            for what, stamp in stamps.items():
+                new = stamp()
+                if new != seen[what]:
+                    seen[what] = new
+                    log.info("%s changed, reloading viewers", what)
                     self._broadcast_json({"type": "reload", "what": what})
 
     # -- lifecycle ----------------------------------------------------------------------
@@ -250,6 +325,9 @@ class SimServer:
             if self.make_engine is not None:
                 self.engine = self.make_engine(self)
                 self.engine.on_change = self._engine_changed
+            if self.make_jobs is not None:
+                self.jobs = self.make_jobs(self)
+                self.jobs.on_change = self._jobs_changed
             watcher = asyncio.create_task(self._watch_files())
             if on_ready:
                 on_ready(self)
@@ -257,6 +335,9 @@ class SimServer:
                 await (stop if stop is not None else asyncio.Future())
             finally:
                 watcher.cancel()
+                if self.jobs is not None and self.jobs.busy:  # saves progress, LEDs off
+                    self.jobs.cancel()
+                    await asyncio.to_thread(self.jobs.wait, 10)
                 if self.engine is not None:  # turns the LEDs off while we can still relay
                     await asyncio.to_thread(self.engine.stop)
 
@@ -316,6 +397,14 @@ def _mtime(path: Path) -> float | None:
         return path.stat().st_mtime_ns
     except FileNotFoundError:
         return None
+
+
+def _dir_stamp(path: Path) -> tuple:
+    """Changes whenever a scan result or override in ``path`` is written."""
+    try:
+        return tuple(sorted((p.name, p.stat().st_mtime_ns) for p in path.glob("*.json")))
+    except FileNotFoundError:
+        return ()
 
 
 def _response(status: HTTPStatus, body: bytes, content_type: str) -> Response:

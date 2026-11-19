@@ -10,9 +10,9 @@ still, turns the tree anticlockwise).
 Each photo is a dim, noisy room with the currently lit LEDs drawn as Gaussian blobs in
 perspective. To make the scan earn its keep, the camera also mimics a real tree:
 
-* LEDs on the far side shine through foliage and are dimmed; behind the trunk they
-  almost vanish;
-* each view hides a random few LEDs behind branches;
+* only LEDs facing the camera are reliably in view. Towards the sides more and more
+  are dimmed or hidden by branches, and at the back most are gone (``occlusion``
+  sets how strongly, 0-1); behind the trunk they all but vanish;
 * each view is a couple of degrees off the requested angle and not quite aimed at the
   trunk, like a tree turned by hand;
 * the room has static lights (which the dark reference cancels out), some LEDs throw a
@@ -37,6 +37,8 @@ GAIN = 600.0  # pixel value of an unobstructed full-white LED's core (clipped to
 HALO = (5.0, 0.05)  # glow round each LED: (sigma multiple, relative amplitude)
 LED_SIGMA = 1.6  # px blob radius at the camera's standoff distance
 GLOW_SHIFT = 0.8  # px, random offset of each LED's apparent centre per view
+DEFAULT_OCCLUSION = 0.8  # how much of the tree away from the camera the foliage hides, 0-1
+FACING = 0.3  # LEDs at least this far round towards the camera are in clear view
 
 
 @dataclass
@@ -69,8 +71,12 @@ class SimCamera(Camera):
         noise: float = 2.5,
         clean: bool = False,
         seed: int | None = None,
+        hidden: list[int] | tuple[int, ...] = (),
+        occlusion: float = DEFAULT_OCCLUSION,
     ) -> None:
         self.tree = tree
+        self.hidden = list(hidden)  # LEDs this camera never sees (dead or buried)
+        self.occlusion = occlusion  # 0 = see-through tree, 1 = back of the tree hidden
         self.frame_source = frame_source
         self.width, self.height = width, height
         tan = math.tan(math.radians(fov_deg) / 2)
@@ -139,17 +145,23 @@ class SimCamera(Camera):
         # -1 = far side of the foliage, 0 = silhouette edge, 1 = nearest the camera
         radius = np.maximum(tree.cone_radius_at(pos[:, 1]), 0.05)
         front = np.clip(-(pos @ forward) / radius, -1.0, 1.0)
-        behind = np.clip(-front, 0.0, 1.0)
+        # 0 for LEDs facing the camera (front >= 0.3), rising to 1 at the very back
+        behind = np.clip((FACING - front) / (1.0 + FACING), 0.0, 1.0)
         visibility = np.ones(n)
         reflect = np.zeros(n, dtype=bool)
         if not self.clean:
-            visibility = 1.0 - 0.85 * behind
+            occ = self.occlusion
+            visibility = 1.0 - occ * behind  # light through the foliage
             lateral = pos @ right
             visibility[(front < 0) & (np.abs(lateral) < tree.trunk_radius * 1.2)] *= 0.03
-            hidden = rng.random(n) < 0.05 + 0.4 * behind  # behind a branch in this view
-            # about a third vanish completely, the rest glimmer through the needles
-            visibility[hidden] *= np.clip(rng.uniform(-0.05, 0.1, hidden.sum()), 0.0, None)
+            # behind a branch in this view: rare at the front, likely at the sides, and
+            # almost certain at the back (at full occlusion)
+            hidden = rng.random(n) < 0.05 + 0.9 * occ * behind
+            # two thirds vanish completely, the rest glimmer through the needles
+            visibility[hidden] *= np.clip(rng.uniform(-0.1, 0.05, hidden.sum()), 0.0, None)
             reflect = rng.random(n) < 0.03
+        visibility[self.hidden] = 0.0
+        reflect[self.hidden] = False
         offset_angle = rng.uniform(0, 2 * np.pi, n)
         offset_len = rng.uniform(15, 60, n)
         reflect_uv = uv + offset_len[:, None] * np.stack(
