@@ -3,8 +3,10 @@
   import Alert from "../components/ui/Alert.svelte";
   import Button from "../components/ui/Button.svelte";
   import Card from "../components/ui/Card.svelte";
+  import Segmented from "../components/ui/Segmented.svelte";
   import StepHeader from "../components/ui/StepHeader.svelte";
-  import { runEffect, setBrightness, stopEffect } from "../lib/actions";
+  import { runEffect, setBrightness, setEffectMap, stopEffect } from "../lib/actions";
+  import type { MapChoice } from "../lib/types";
   import { app } from "../lib/state.svelte";
   import EffectParams from "./EffectParams.svelte";
 
@@ -14,6 +16,11 @@
   const running = $derived(effects.find((e) => e.name === app.engine.running) ?? null);
   let brightness = $state<number | null>(null); // while dragging
   const shownBrightness = $derived(brightness ?? Math.round(app.engine.brightness * 100));
+  const MAP_LABELS: Record<MapChoice, { label: string; title: string }> = {
+    scanned: { label: "Scanned map", title: "Where the scan placed each LED: what the real tree will use" },
+    truth: { label: "True tree", title: "The simulated tree's real positions, to compare against" },
+  };
+  const mapOptions = $derived((app.engine.maps ?? []).map((m) => ({ value: m, ...MAP_LABELS[m] })));
 </script>
 
 <StepHeader title="Effects" description="Light shows that use the mapped positions. Pick one, then tune it." />
@@ -45,6 +52,11 @@
 
   {#each groups as g}
     <Card title={g}>
+      {#snippet actions()}
+        {#if g === "3D" && mapOptions.length > 1 && app.engine.map}
+          <Segmented size="sm" value={app.engine.map} onchange={setEffectMap} options={mapOptions} />
+        {/if}
+      {/snippet}
       <div class="grid">
         {#each effects.filter((e) => e.group === g) as e (e.name)}
           <button class="fx" class:on={app.engine.running === e.name} title={e.description} disabled={app.scanning}

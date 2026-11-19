@@ -85,8 +85,11 @@ export interface EngineState {
   running: string | null;
   params: Record<string, unknown> | null;
   brightness: number;
+  map?: MapChoice | null; // positions the 3D effects use
+  maps?: MapChoice[];
   error?: string | null;
 }
+export type MapChoice = "scanned" | "truth";
 
 export interface ScanProgress {
   round: number;

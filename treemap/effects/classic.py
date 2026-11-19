@@ -1,21 +1,15 @@
 """Classic strip effects that work along the LED index, like a controller's built-ins.
 
-They need no map, so they run on a fresh tree before any scan. Position-aware 3D effects
-(planes, spirals, ...) arrive with the mapped tree.
+They need no map, so they run on a fresh tree before any scan. The position-aware ones are
+in :mod:`treemap.effects.spatial`.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from treemap.effects.base import Effect, Param, hsv_to_rgb
+from treemap.effects.base import CHRISTMAS, WARM_WHITE, Effect, Param, hsv_to_rgb
 from treemap.effects.registry import register
-
-WARM_WHITE = (255, 150, 60)
-CHRISTMAS = np.array(
-    [(255, 0, 0), (0, 200, 0), (0, 60, 255), (255, 160, 0), (255, 40, 120), (255, 255, 255)],
-    dtype=np.float32,
-)
 
 
 def _speed(default: float, lo: float, hi: float, unit: str = "LEDs/s", **kw) -> Param:

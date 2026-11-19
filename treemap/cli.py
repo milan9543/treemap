@@ -8,6 +8,7 @@ import logging
 import webbrowser
 from collections.abc import Iterator
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Annotated
 
@@ -285,6 +286,11 @@ def sim_evaluate(ctx: typer.Context) -> None:
 
 # -- effects --------------------------------------------------------------------------
 
+class MapChoice(str, Enum):
+    scanned = "scanned"
+    truth = "truth"
+
+
 SecondsOptRun = Annotated[
     float | None,
     typer.Option(help="How long to run. Default: until Ctrl-C.", show_default=False),
@@ -325,19 +331,23 @@ def _make_jobs(cfg: Config, server):
 
 
 def _make_engine(cfg: Config, sim_port: int | None = None, brightness: float | None = None,
-                 fps: float | None = None, source: str | None = None):
-    """An effects engine sending to the configured output (the sim viewer on ``sim_port``)."""
+                 fps: float | None = None, source: str | None = None, map_choice: str = "scanned"):
+    """An effects engine sending to the configured output (the sim viewer on ``sim_port``).
+    3D effects use the scanned map, or with ``map_choice="truth"`` the simulated tree."""
     from treemap.effects import EffectContext
     from treemap.engine import Engine
-    from treemap.mapping.model import MapFile
+    from treemap.mapping.source import MapSource
 
     fps = fps or cfg.engine.fps
+    truth = cfg.sim_tree_path if cfg.output == "sim" or map_choice == "truth" else None
     return Engine(
         _output_factory(cfg, sim_port, source),
-        EffectContext(n=cfg.led_count, fps=fps, tree_map=MapFile(cfg.map_path)),
+        EffectContext(n=cfg.led_count, fps=fps,
+                      tree_map=MapSource(cfg.map_path, truth, map_choice)),
         fps=fps,
         brightness=cfg.engine.brightness if brightness is None else brightness,
         crossfade_s=cfg.engine.crossfade,
+        gamma=cfg.gamma,
     )
 
 
@@ -376,6 +386,10 @@ def run_effect(
         float | None, typer.Option(min=0, max=1, help="0-1. Default: engine.brightness.")
     ] = None,
     fps: Annotated[float | None, typer.Option(min=1, max=120, help="Default: engine.fps.")] = None,
+    map_choice: Annotated[
+        MapChoice, typer.Option("--map", help="Positions for the 3D effects: the scanned map, "
+                                "or the simulated tree's true ones.")
+    ] = MapChoice.scanned,
 ) -> None:
     """Run an effect on the configured output until Ctrl-C."""
     import time
@@ -390,7 +404,7 @@ def run_effect(
             raise typer.BadParameter(f"{item!r}: expected key=value", param_hint="--param")
         params[key.strip()] = value.strip()
 
-    engine = _make_engine(cfg, brightness=brightness, fps=fps)
+    engine = _make_engine(cfg, brightness=brightness, fps=fps, map_choice=map_choice.value)
     try:
         engine.start(effect, params)
     except KeyError as e:

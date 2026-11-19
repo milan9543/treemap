@@ -41,6 +41,8 @@ engine:
   fps: 40              # frames per second sent to the LEDs
   brightness: 0.8      # 0-1, scales every effect; also limits power draw
   crossfade: 0.6       # seconds to blend when switching effects
+  gamma: null          # null = 1 in the simulator, 2.2 on WLED (LEDs are linear: without it,
+                       # fades look too bright). Lower it if dim colours look too dark.
 
 # The simulated tree (also editable in the viewer's Tree panel). null = random.
 sim:

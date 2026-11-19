@@ -58,6 +58,7 @@ class EngineConfig:
     fps: float = 40.0
     brightness: float = 0.8
     crossfade: float = 0.6  # seconds
+    gamma: float | None = None  # None: see Config.gamma
 
 
 @dataclass
@@ -113,6 +114,14 @@ class Config:
     def map_path(self) -> Path:
         """The reconstructed map written by ``treemap reconstruct``."""
         return self.resolve(Path("data") / "tree_map.json")
+
+    @property
+    def gamma(self) -> float:
+        """engine.gamma, or by default 1 in the simulator (the screen already applies a
+        gamma curve) and 2.2 on real LEDs, which are linear."""
+        if self.engine.gamma is not None:
+            return float(self.engine.gamma)
+        return 2.2 if self.output == "wled" else 1.0
 
     @property
     def sim_tree_path(self) -> Path:
@@ -172,6 +181,8 @@ class Config:
         _check_number("engine.fps", self.engine.fps, minimum=1, maximum=120)
         _check_number("engine.brightness", self.engine.brightness, minimum=0, maximum=1)
         _check_number("engine.crossfade", self.engine.crossfade, minimum=0, maximum=10)
+        if self.engine.gamma is not None:
+            _check_number("engine.gamma", self.engine.gamma, minimum=1, maximum=3)
 
         sim = self.sim
         if sim.seed is not None:

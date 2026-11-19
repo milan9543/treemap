@@ -39,9 +39,8 @@ def evaluate(tree_map: TreeMap, tree: SimTree) -> Evaluation:
         raise ValueError(
             f"the map has {tree_map.led_count} LEDs but the simulated tree has {tree.led_count}"
         )
-    T = tree.positions.astype(float)
-    y0, y1 = T[:, 1].min(), T[:, 1].max()
-    T = (T - [0.0, y0, 0.0]) / (y1 - y0)  # normalised like the map, trunk at x = z = 0
+    y0, y1 = tree.positions[:, 1].min(), tree.positions[:, 1].max()
+    T = tree.normalised_positions()
     M = tree_map.positions
     ok = (tree_map.status == "ok") & np.isfinite(M).all(axis=1)
     if ok.sum() < 3:

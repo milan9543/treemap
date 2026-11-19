@@ -1,8 +1,11 @@
 """The effects engine: renders the current effect at a fixed frame rate to an LedOutput.
 
 It runs on a background thread so it can be driven from the CLI or from the viewer
-server. Switching effects crossfades; parameters and brightness can change while it
-runs; stopping turns the LEDs off and closes the output.
+server. Switching effects crossfades; parameters, brightness and the map the 3D effects
+use can change while it runs; stopping turns the LEDs off and closes the output.
+
+Each frame is crossfaded, scaled by the brightness, then gamma-corrected: LEDs are
+linear, so without it the dim half of every fade looks too bright on a real tree.
 """
 
 from __future__ import annotations
@@ -15,7 +18,7 @@ from typing import Any
 
 import numpy as np
 
-from treemap.effects import Effect, EffectContext, create_effect
+from treemap.effects import Effect, EffectContext, MapEffect, create_effect
 from treemap.outputs.base import LedOutput
 
 log = logging.getLogger(__name__)
@@ -29,6 +32,7 @@ class Engine:
         fps: float = 40.0,
         brightness: float = 1.0,
         crossfade_s: float = 0.6,
+        gamma: float = 1.0,
         on_change: Callable[[], None] | None = None,
     ) -> None:
         self.output_factory = output_factory
@@ -37,6 +41,9 @@ class Engine:
         self.brightness = brightness
         self.crossfade_s = crossfade_s
         self.on_change = on_change
+        self.gamma = gamma
+        self._lut = None if gamma == 1 else np.round(
+            255 * (np.arange(256) / 255) ** gamma).astype(np.uint8)
         self.error: str | None = None
         self.frames = 0
 
@@ -97,6 +104,21 @@ class Engine:
         self.brightness = float(value)
         self._changed()
 
+    def set_map(self, choice: str) -> None:
+        """Switch the map the 3D effects use (see ``treemap.mapping.source.MapSource``).
+        Raises LookupError, or ValueError for an unknown choice."""
+        source = self.ctx.tree_map
+        if not hasattr(source, "select"):
+            raise LookupError("this engine has a single map")
+        with self._lock:
+            before = source.choice
+            source.select(choice)
+            if isinstance(self._current, MapEffect) and source() is None:
+                message = source.missing()  # for the new choice
+                source.select(before)  # keep the running effect lit
+                raise LookupError(message)
+        self._changed()
+
     def stop(self, timeout: float = 5.0) -> None:
         """Stop, turn the LEDs off and close the output."""
         with self._lock:
@@ -122,11 +144,14 @@ class Engine:
     def state(self) -> dict[str, Any]:
         with self._lock:
             cur = self._current
+            source = self.ctx.tree_map
             return {
                 "running": cur.name if cur else None,
                 "params": cur.param_values() if cur else None,
                 "brightness": self.brightness,
                 "fps": self.fps,
+                "map": getattr(source, "choice", None),
+                "maps": getattr(source, "choices", []),
                 "error": self.error,
             }
 
@@ -149,8 +174,8 @@ class Engine:
                         self._previous.render(now - self._previous_t0), dtype=np.float32
                     )
                     frame = old * (1 - a) + frame * a
-        frame = frame * self.brightness
-        return np.clip(frame + 0.5, 0, 255).astype(np.uint8)
+        frame = np.clip(frame * self.brightness + 0.5, 0, 255).astype(np.uint8)
+        return frame if self._lut is None else self._lut[frame]
 
     def _loop(self, stop: threading.Event) -> None:
         try:

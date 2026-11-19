@@ -2,7 +2,7 @@
 import * as controls from "../3d/controls";
 import * as scene from "../3d/scene";
 import { app, setStep, type ViewMode } from "./state.svelte";
-import type { CompareData, EffectsInfo, ServerConfig, Tree, TreeMapData } from "./types";
+import type { CompareData, EffectsInfo, MapChoice, ServerConfig, Tree, TreeMapData } from "./types";
 import { fetchJson, throttled } from "./util";
 import * as ws from "./ws";
 
@@ -119,6 +119,10 @@ export function setEffectParam(name: string, value: unknown): void {
 }
 
 export const setBrightness = throttled(60, (value: number) => send({ type: "effect.brightness", value }));
+
+export function setEffectMap(map: MapChoice): void {
+  if (send({ type: "effect.map", map })) app.effectError = null;
+}
 
 // -- LEDs --------------------------------------------------------------------------------
 

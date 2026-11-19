@@ -24,6 +24,7 @@ Websockets:
                    {"type": "effect.run", "effect", "params"}
                    {"type": "effect.params", "params"}
                    {"type": "effect.brightness", "value"}
+                   {"type": "effect.map", "map"}  (scanned | truth: positions for 3D effects)
                    {"type": "effect.stop"}
                    {"type": "job.start", "job", "params"}  (see treemap.jobs)
                    {"type": "job.cancel"}
@@ -259,6 +260,8 @@ class SimServer:
                 if isinstance(value, bool) or not isinstance(value, (int, float)):
                     raise ValueError("brightness must be a number 0-1")
                 engine.set_brightness(float(value))
+            elif kind == "effect.map":
+                engine.set_map(str(msg.get("map")))
             elif kind == "effect.stop":
                 await asyncio.to_thread(engine.stop)
             else:

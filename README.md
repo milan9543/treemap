@@ -70,7 +70,12 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
      **Interpolate** fills it in from its neighbours; to measure it better, scan again
      and film that part of the tree.
 4. **Effects**: click an effect to run it. Its controls and the master brightness are
-   under **Now playing**.
+   under **Now playing**. The **3D** effects (plane, 3D rainbow, spiral, bursts) colour
+   each LED by where it is on the tree; the switch on that card picks their positions:
+   the **Scanned map** (what the real tree will use) or, in the simulator, the **True
+   tree**. Compare the two to see how much the scan's errors show. The scanned map's
+   "front" is wherever the scan started, so effects that turn round the trunk can start
+   at a different angle on each.
 
 The toolbar at the bottom of the 3D view switches between **Truth**, **Scanned** and
 **Compare** (`t` cycles). Compare draws a line from each LED's true position to where the
@@ -96,6 +101,7 @@ Keep `treemap sim view` running in one terminal to watch; run these in another.
 | Accuracy against the simulator | `treemap sim evaluate` |
 | List effects | `treemap effects` |
 | Run an effect | `treemap run rainbow -p speed=0.5 --seconds 30` |
+| Run a 3D effect on the true positions | `treemap run plane -p direction=around --map truth` |
 | Show the config | `treemap config show` |
 
 `treemap scan` needs the viewer open, because the viewer's virtual phone films the
@@ -137,6 +143,7 @@ file. The keys you're most likely to change:
 | `scan.camera_fps` | Photos per second the virtual phone sends. |
 | `scan.profile` | Scan rounds are kept in `data/scans/<profile>/`. |
 | `engine.fps`, `engine.brightness`, `engine.crossfade` | Effects frame rate, overall brightness 0–1, and the blend time when switching effects. |
+| `engine.gamma` | Gamma correction of effect frames. `null` = 1 in the simulator (the screen already applies one) and 2.2 on WLED (LEDs are linear). |
 | `sim.strips`, `sim.height`, `sim.radius`, `sim.layout`, `sim.seed` | Defaults for generated trees (`null` = random). |
 | `sim.hidden_leds` | LEDs the virtual phone never sees, e.g. `"57, 120-127"`, to try out fixing bad LEDs. |
 

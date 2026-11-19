@@ -200,6 +200,12 @@ class SimTree:
     def max_spacing(self) -> float:
         return max(s.spacing for s in self.strands)
 
+    def normalised_positions(self) -> np.ndarray:
+        """Positions in the tree map's frame: y 0 (lowest LED) to 1 (highest), x and z
+        centred on the trunk, all divided by the LEDs' height span."""
+        y0, y1 = self.positions[:, 1].min(), self.positions[:, 1].max()
+        return (self.positions - [0.0, y0, 0.0]) / (y1 - y0)
+
     def cone_radius_at(self, y: np.ndarray | float) -> np.ndarray:
         """Outer radius of the foliage cone at height ``y``."""
         return self.radius * np.clip(1.0 - np.asarray(y) / self.height, 0.0, 1.0)

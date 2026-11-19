@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,45 @@ import numpy as np
 
 FORMAT_VERSION = 1
 STATUSES = ("ok", "interpolated", "failed")
+
+
+@dataclass(frozen=True)
+class Geometry:
+    """A map's positions in the forms effects use, as float32 arrays of length N.
+
+    Rows without a position (``valid`` False) hold zeros, so effects can compute on every
+    LED without NaN warnings and black the invalid ones out at the end.
+
+    - ``xyz``: the map's coordinates (y up, 0 at the lowest LED, 1 at the highest).
+    - ``r``, ``theta``, ``h``: cylindrical round the trunk. ``theta`` is 0 at the front
+      (+z, where the first scan angle looks from) and grows towards +x, in -π..π.
+    - ``u``, ``v``: the front view, 0-1: u left to right across the widest LED, v = h.
+    - ``lo``, ``hi``: the (3,) bounding box of the valid LEDs.
+    """
+
+    valid: np.ndarray
+    xyz: np.ndarray
+    r: np.ndarray
+    theta: np.ndarray
+    h: np.ndarray
+    u: np.ndarray
+    v: np.ndarray
+    lo: np.ndarray
+    hi: np.ndarray
+    status: np.ndarray
+
+    @classmethod
+    def of(cls, positions: np.ndarray, status: np.ndarray) -> Geometry:
+        valid = np.isfinite(positions).all(axis=1)
+        xyz = np.where(valid[:, None], positions, 0.0).astype(np.float32)
+        x, y, z = xyz.T
+        r = np.hypot(x, z)
+        r_max = float(r[valid].max()) if valid.any() else 0.0
+        u = 0.5 + x / (2 * r_max) if r_max > 0 else np.full_like(x, 0.5)
+        lo = xyz[valid].min(axis=0) if valid.any() else np.zeros(3, np.float32)
+        hi = xyz[valid].max(axis=0) if valid.any() else np.zeros(3, np.float32)
+        return cls(valid, xyz, r, np.arctan2(x, z), y.copy(), u.astype(np.float32), y.copy(),
+                   lo, hi, status)
 
 
 @dataclass
@@ -29,6 +69,11 @@ class TreeMap:
     @property
     def led_count(self) -> int:
         return len(self.positions)
+
+    @cached_property
+    def geometry(self) -> Geometry:
+        """Cylindrical and front-view coordinates for effects (computed once per map)."""
+        return Geometry.of(self.positions, self.status)
 
     def counts(self) -> dict[str, int]:
         return {s: int((self.status == s).sum()) for s in STATUSES}

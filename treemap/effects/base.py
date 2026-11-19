@@ -17,9 +17,16 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from treemap.mapping.model import TreeMap
 from treemap.patterns import parse_color
 
 KINDS = ("color", "float", "int", "choice", "bool")
+
+WARM_WHITE = (255, 150, 60)
+CHRISTMAS = np.array(  # palette: red, green, blue, gold, pink, white
+    [(255, 0, 0), (0, 200, 0), (0, 60, 255), (255, 160, 0), (255, 40, 120), (255, 255, 255)],
+    dtype=np.float32,
+)
 
 
 class ParamError(ValueError):
@@ -116,10 +123,10 @@ class EffectContext:
 
     n: int  # number of LEDs
     fps: float = 40.0  # nominal frame rate, for effects that step per frame
-    positions: np.ndarray | None = None  # (n, 3) map, once position-aware effects arrive
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
-    # Returns the current tree map (or None); see treemap.mapping.model.MapFile.
-    tree_map: Callable[[], Any] | None = None
+    # Returns the current tree map (or None); usually a treemap.mapping.source.MapSource,
+    # which can switch between the scanned map and the simulator's true tree.
+    tree_map: Callable[[], TreeMap | None] | None = None
 
 
 class Effect:
@@ -175,6 +182,36 @@ class Effect:
 
     def color(self, name: str) -> np.ndarray:
         return np.asarray(self.p[name], dtype=np.float32)
+
+
+class MapEffect(Effect):
+    """An effect that needs the LED positions. Starting one without a map is a
+    ParamError; if the map goes away while it runs, it renders black."""
+
+    def setup(self) -> None:
+        if self.tree_map() is None:
+            load = self.ctx.tree_map
+            missing = getattr(load, "missing", None)
+            raise ParamError(missing() if missing else "no tree map yet: scan the tree first")
+
+    def tree_map(self) -> TreeMap | None:
+        """The current map (reloaded if it changed on disk), if it fits these LEDs."""
+        load = self.ctx.tree_map
+        m = load() if load is not None else None
+        if m is not None and m.led_count != self.n:
+            raise ParamError(f"the tree map has {m.led_count} LEDs but led_count is {self.n}")
+        return m
+
+    def render(self, t: float) -> np.ndarray:
+        m = self.tree_map()
+        if m is None:
+            return self.blank()
+        frame = self.render_map(t, m)
+        return np.where(m.geometry.valid[:, None], frame, 0.0)
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        """The frame at ``t`` for map ``m``; LEDs without a position are blacked out."""
+        raise NotImplementedError
 
 
 def hsv_to_rgb(h: np.ndarray, s: np.ndarray | float = 1.0, v: np.ndarray | float = 1.0) -> np.ndarray:
