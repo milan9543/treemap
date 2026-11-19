@@ -37,17 +37,20 @@ class Controller:
 
 @dataclass
 class CameraConfig:
-    type: str = "sim"
+    type: str = "sim"  # sim: the viewer's virtual phone; android: IP Webcam
     url: str | None = None
+    fov_deg: float = 65.0  # horizontal field of view, a starting guess the solve refines
 
 
 @dataclass
 class ScanConfig:
     profile: str = "default"
-    angles: list[float] = field(default_factory=lambda: [0.0, 90.0, 180.0, 270.0])
-    settle_ms: int = 150
-    brightness: int = 255
-    min_confidence: float = 0.3
+    symbol_ms: int = 150  # how long each colour of the code shows
+    brightness: int = 160  # 0-255 while flashing; lower keeps a real camera from clipping
+    round_s: float = 12.0  # seconds of flashing per round
+    status_s: float = 4.0  # seconds of status colours between rounds
+    max_rounds: int = 10  # stop after this many rounds (or when every LED is ok)
+    camera_fps: float = 24.0  # frames per second the viewer's virtual phone sends
 
 
 @dataclass
@@ -74,8 +77,7 @@ class SimConfig:
     radius: float | None = None
     layout: str = "auto"
     quirks: bool = True
-    hidden_leds: str | None = None  # e.g. "57, 120-127": never seen by the sim camera
-    occlusion: float = 0.8  # 0-1: how much foliage hides LEDs away from the sim camera
+    hidden_leds: str | None = None  # e.g. "57, 120-127": never seen by the virtual phone
     tree_file: str = "data/sim_tree.json"
     host: str = "127.0.0.1"
     port: int = 8765
@@ -159,16 +161,13 @@ class Config:
         s = self.scan
         if not isinstance(s.profile, str) or not s.profile or "/" in s.profile:
             raise ConfigError("scan.profile must be a non-empty name without '/'")
-        if not isinstance(s.angles, list) or not s.angles:
-            raise ConfigError("scan.angles must be a non-empty list of degrees")
-        for a in s.angles:
-            if isinstance(a, bool) or not isinstance(a, (int, float)):
-                raise ConfigError(f"scan.angles contains a non-number: {a!r}")
-        if len({float(a) % 360 for a in s.angles}) != len(s.angles):
-            raise ConfigError("scan.angles contains duplicate angles")
-        _check_int("scan.settle_ms", s.settle_ms, minimum=0)
+        _check_int("scan.symbol_ms", s.symbol_ms, minimum=40, maximum=2000)
         _check_int("scan.brightness", s.brightness, minimum=1, maximum=255)
-        _check_number("scan.min_confidence", s.min_confidence, minimum=0.0, maximum=1.0)
+        _check_number("scan.round_s", s.round_s, minimum=2, maximum=600)
+        _check_number("scan.status_s", s.status_s, minimum=0, maximum=60)
+        _check_int("scan.max_rounds", s.max_rounds, minimum=1)
+        _check_number("scan.camera_fps", s.camera_fps, minimum=5, maximum=60)
+        _check_number("camera.fov_deg", self.camera.fov_deg, minimum=20, maximum=150)
 
         _check_number("engine.fps", self.engine.fps, minimum=1, maximum=120)
         _check_number("engine.brightness", self.engine.brightness, minimum=0, maximum=1)
@@ -185,7 +184,6 @@ class Config:
             if getattr(sim, key) is not None:
                 _check_number(f"sim.{key}", getattr(sim, key))
         _check_bool("sim.quirks", sim.quirks)
-        _check_number("sim.occlusion", sim.occlusion, minimum=0, maximum=1)
         if sim.hidden_leds is not None:
             try:
                 parse_leds(str(sim.hidden_leds), self.led_count)

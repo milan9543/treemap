@@ -17,17 +17,24 @@ controllers:
 #  - {host: 192.168.1.51, start: 0,   count: 200, reverse: false}
 #  - {host: 192.168.1.52, start: 200, count: 200, reverse: true}
 
-# Where photos come from: "sim" (rendered virtual photos) or "android" (IP Webcam app).
+# Where the scan's video comes from: "sim" (the viewer's virtual phone: walk round the
+# tree with WASD and the mouse) or "android" (IP Webcam app, not built yet).
 camera:
   type: sim
   url: null            # e.g. http://192.168.1.60:8080 for android
+  fov_deg: 65          # horizontal field of view; a starting guess the solve refines
 
+# Scanning: every LED flashes its own colour code while you walk round the tree. Each
+# round flashes for round_s, solves, then shows the result on the tree for status_s
+# (green ok, yellow interpolated, red failed) before the next round.
 scan:
-  profile: default     # scans are stored in data/scans/<profile>/
-  angles: [0, 90, 180, 270]
-  settle_ms: 150       # wait after lighting an LED before capturing
-  brightness: 255      # 0-255 value used for the lit LED
-  min_confidence: 0.3  # detections below this are discarded
+  profile: default     # rounds are stored in data/scans/<profile>/
+  symbol_ms: 150       # how long each colour of the code shows
+  brightness: 160      # 0-255 while flashing; lower stops a real camera clipping colours
+  round_s: 12          # seconds of flashing per round
+  status_s: 4          # seconds of status colours between rounds
+  max_rounds: 10       # stop after this many rounds (or once every LED is ok)
+  camera_fps: 24       # photos per second the viewer's virtual phone sends
 
 # Effects engine (treemap run, and the viewer's Effects panel).
 engine:
@@ -48,9 +55,7 @@ sim:
   radius: null         # metres at the base; null = random 0.5-0.8
   layout: auto         # interleaved | stacked | auto (auto = sometimes stacked, if quirks)
   quirks: true         # let "auto" settings pick wiring quirks at random
-  occlusion: 0.8       # 0-1: how much foliage hides LEDs not facing the sim camera
-                       # (0 = see-through tree, 1 = the back of the tree is hidden)
-  hidden_leds: null    # LEDs the sim camera never sees, e.g. "57, 120-127", to try out
+  hidden_leds: null    # LEDs the virtual phone never sees, e.g. "57, 120-127", to try out
                        # show-mapping and fix on bad LEDs
   tree_file: data/sim_tree.json
   host: 127.0.0.1

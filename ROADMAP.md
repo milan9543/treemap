@@ -8,7 +8,7 @@
 
 **Core design rule:** all hardware sits behind two interfaces.
 - **`LedOutput`**, which shows colours, has two implementations: `SimOutput` (the browser viewer) and `WledOutput` (DDP over UDP).
-- **`Camera`**, which captures a fresh frame, has two implementations: `SimCamera` (rendered virtual photos) and `AndroidCamera` (the IP Webcam app).
+- **`Camera`**, a stream of frames, has two implementations: `BrowserCamera` (the viewer's virtual phone, which you walk round the simulated tree) and `AndroidCamera` (the IP Webcam app).
 
 Scan, reconstruction, diagnostics and effects never know whether they're running in the simulator or on the real tree. `config.yaml` selects the mode, and sim is the default.
 
@@ -109,19 +109,17 @@ treemap/
 ### Phase B: real hardware (once WLED and the LEDs arrive)
 
 #### Batch 9: Android camera
-- **`AndroidCamera`** uses the "IP Webcam" Android app:
-  - Each capture is a `GET {url}/shot.jpg`, so frames are always fresh. The MJPEG stream isn't used, because of its lag.
+- **`AndroidCamera`** reads the "IP Webcam" Android app's MJPEG stream (`{url}/video`) into the `Camera.read()` stream, timestamping frames on arrival. The scan decodes from colour changes, not timing, so stream lag doesn't matter.
   - It tries to lock exposure, white balance and focus through the app's endpoints, and otherwise asks you to set them by hand.
-  - A stale-frame check confirms that the blob moves between LEDs.
-- **`treemap camera check`** saves a dark shot and a lit shot.
+  - `show_detections` could later draw the scan's detections on the phone.
+- **`treemap camera check`** saves a few frames and reports the frame rate and colour separation of a red/green/blue test pattern.
 - This batch can be done with the phone alone, before WLED arrives.
-- **Done when:** fresh, well-exposed shots arrive reliably over Wi-Fi.
+- **Done when:** frames arrive reliably over Wi-Fi at 20+ fps.
 
 #### Batch 10: real tree session
 - Set `output: wled` and `camera: android`, then:
   - `test chase` to confirm the index order;
-  - scan 4 angles with the phone on a tripod in a dark room;
-  - `reconstruct`;
+  - `treemap scan`, walking round the tree with the phone in a dark room;
   - `show-mapping` and `--verify`;
   - fix problem LEDs;
   - run the effects and playlist.
@@ -131,8 +129,8 @@ treemap/
 - `treemap export-ledmap --grid 20x25` writes a WLED `ledmap.json` from the front projection, so WLED's built-in 2D effects work without a computer.
 
 ### Ideas backlog
-- A faster scan using binary-coded patterns (about 9–18 frames per angle instead of 400).
-- More scan angles, or perspective correction, for better depth.
+- Later scan rounds could flash only the LEDs that aren't ok yet, with shorter codes.
+- Use the phone's motion sensors (or its horizon) to fix "up" more firmly.
 - A Raspberry Pi deployment as a systemd service.
 - A web UI to pick effects and tune their parameters from a phone.
 

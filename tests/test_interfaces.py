@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from treemap.cameras import Camera
+from treemap.cameras import Camera, Frame
 from treemap.outputs import LedOutput
 
 
@@ -23,8 +23,8 @@ class FakeCamera(Camera):
         self.frame = frame
         self.closed = False
 
-    def _capture(self):
-        return self.frame
+    def _read(self, timeout):
+        return Frame(0.0, self.frame)
 
     def close(self) -> None:
         self.closed = True
@@ -92,13 +92,12 @@ def test_output_context_manager_closes():
 def test_camera_returns_valid_frame():
     frame = np.zeros((48, 64, 3), dtype=np.uint8)
     cam = FakeCamera(frame)
-    assert cam.capture() is frame
+    assert cam.read(0).image is frame
 
 
 @pytest.mark.parametrize(
     "frame, exc",
     [
-        (None, TypeError),
         (np.zeros((48, 64), dtype=np.uint8), ValueError),
         (np.zeros((48, 64, 4), dtype=np.uint8), ValueError),
         (np.zeros((48, 64, 3), dtype=np.float32), ValueError),
@@ -106,10 +105,10 @@ def test_camera_returns_valid_frame():
 )
 def test_camera_rejects_bad_frames(frame, exc):
     with pytest.raises(exc):
-        FakeCamera(frame).capture()
+        FakeCamera(frame).read(0)
 
 
 def test_camera_context_manager_closes():
     with FakeCamera(np.zeros((1, 1, 3), dtype=np.uint8)) as cam:
-        cam.capture()
+        cam.read(0)
     assert cam.closed

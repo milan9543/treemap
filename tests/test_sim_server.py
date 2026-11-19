@@ -46,9 +46,18 @@ def recv_until(ws, predicate, timeout=5.0):
 
 
 def test_serves_viewer_page(server):
+    from treemap.sim.server import viewer_dir
+
     status, ctype, body = get(server, "/")
     assert status == 200 and ctype.startswith("text/html")
-    assert b"three" in body and b"/ws/viewer" in body
+    if not viewer_dir().joinpath("index.html").is_file():
+        assert b"isn't built yet" in body
+        return
+    script = body.split(b'src="/assets/')[1].split(b'"')[0].decode()
+    status, ctype, js = get(server, f"/assets/{script}")
+    assert status == 200 and ctype.startswith("text/javascript") and b"/ws/viewer" in js
+    with pytest.raises(urllib.error.HTTPError):
+        get(server, "/assets/..%2Fsim_tree.json")
 
 
 def test_serves_tree_and_404s(server):

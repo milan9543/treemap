@@ -1,48 +1,56 @@
-"""The ``Camera`` interface: anything that can take a fresh photo of the tree."""
+"""The ``Camera`` interface: a stream of frames from a camera moving round the tree."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from types import TracebackType
+from typing import Any
 
 import numpy as np
 
 
-class Camera(ABC):
-    """Captures still frames as OpenCV-style BGR images.
+@dataclass
+class Frame:
+    t: float  # s, on the camera's own clock (only differences matter)
+    image: np.ndarray  # (H, W, 3) uint8 BGR
+    # Anything else the camera knows, e.g. the sim's field of view ("fov_v", degrees)
+    # and true pose ("eye", "quat") for debugging. Never needed for the scan.
+    meta: dict[str, Any] = field(default_factory=dict)
 
-    Callers use :meth:`capture`; implementations override :meth:`_capture`. The frame
-    must be *fresh*: taken after ``capture()`` was called, never a buffered older frame,
-    because the scan lights one LED and immediately photographs it.
+
+class Camera(ABC):
+    """Frames arrive continuously; callers take them with :meth:`read`.
+
+    Implementations override :meth:`_read`, and may queue a few frames when the caller
+    is briefly busy (older frames are dropped beyond that).
     """
 
-    def capture(self) -> np.ndarray:
-        """Return a fresh ``(H, W, 3)`` uint8 BGR frame."""
-        frame = self._capture()
-        if not isinstance(frame, np.ndarray):
-            raise TypeError(f"{type(self).__name__} returned {type(frame).__name__}, not ndarray")
-        if frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3:
-            raise ValueError(
-                f"{type(self).__name__} returned a {frame.dtype} frame of shape {frame.shape}; "
-                "expected (H, W, 3) uint8 BGR"
-            )
+    def read(self, timeout: float) -> Frame | None:
+        """The next frame, or None if none arrives within ``timeout`` seconds."""
+        frame = self._read(timeout)
+        if frame is None:
+            return None
+        img = frame.image
+        if not isinstance(img, np.ndarray) or img.dtype != np.uint8 or img.ndim != 3 \
+                or img.shape[2] != 3:
+            raise ValueError(f"{type(self).__name__} returned a frame that isn't (H, W, 3) uint8")
         return frame
 
-    def set_angle(self, angle_deg: float) -> bool:
-        """Move to view angle ``angle_deg`` round the tree, if the camera can do it itself.
+    def drain(self) -> None:
+        """Drop any queued frames, so the next :meth:`read` is a fresh one."""
+        while self._read(0) is not None:
+            pass
 
-        Returns False when a person has to move it (a real camera on a tripod); the
-        caller then asks them to. The angle convention is described in
-        :mod:`treemap.cameras.sim`.
-        """
-        return False
+    def show_detections(self, data: dict[str, Any]) -> None:
+        """Show what the scan sees in the latest frames (on the viewer's phone inset)."""
 
     def close(self) -> None:
         """Release resources. Safe to call more than once."""
 
     @abstractmethod
-    def _capture(self) -> np.ndarray:
-        """Take a fresh photo and return it as an ``(H, W, 3)`` uint8 BGR array."""
+    def _read(self, timeout: float) -> Frame | None:
+        """Return the next frame, waiting up to ``timeout`` s, or None."""
 
     def __enter__(self) -> Camera:
         return self

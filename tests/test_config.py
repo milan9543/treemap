@@ -38,10 +38,10 @@ def test_sim_strips(write_config):
 
 
 def test_partial_sections_merge_with_defaults(write_config):
-    write_config("scan:\n  settle_ms: 300\nsim:\n  seed: 7\n")
+    write_config("scan:\n  symbol_ms: 300\nsim:\n  seed: 7\n")
     cfg = load_config()
-    assert cfg.scan.settle_ms == 300
-    assert cfg.scan.angles == [0.0, 90.0, 180.0, 270.0]
+    assert cfg.scan.symbol_ms == 300
+    assert cfg.scan.round_s == 12.0
     assert cfg.sim.seed == 7
     assert cfg.sim.port == 8765
 
@@ -118,11 +118,10 @@ def test_invalid_yaml_is_an_error(write_config):
         ({"output": "wled", "controllers": []}, "needs at least one entry"),
         ({"camera": {"type": "webcam"}}, "camera.type must be one of"),
         ({"camera": {"type": "android"}}, "needs camera.url"),
-        ({"scan": {"angles": []}}, "non-empty list"),
-        ({"scan": {"angles": [0, 360]}}, "duplicate"),
-        ({"scan": {"angles": [0, "x"]}}, "non-number"),
+        ({"scan": {"angles": [0, 90]}}, "unknown key"),
+        ({"scan": {"symbol_ms": 10}}, "symbol_ms must be >= 40"),
         ({"scan": {"brightness": 300}}, "brightness must be <= 255"),
-        ({"scan": {"min_confidence": 2}}, "min_confidence must be <= 1"),
+        ({"camera": {"fov_deg": 5}}, "fov_deg must be >= 20"),
         ({"scan": {"profile": "a/b"}}, "profile"),
         ({"sim": {"port": 70000}}, "port must be <= 65535"),
         ({"sim": {"seed": 1.5}}, "seed must be an integer"),

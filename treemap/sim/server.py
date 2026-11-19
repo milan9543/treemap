@@ -1,26 +1,32 @@
 """Local HTTP + websocket server for the 3D viewer, all on one port.
 
 HTTP routes:
-    /            the viewer page
+    /            the viewer page (built from viewer/ into treemap/sim/viewer_dist)
+    /assets/*    its scripts and styles
     /api/config  led_count, the generator defaults from config.yaml and accepted ranges
     /api/tree    the simulator ground truth (sim_tree.json), 404 if not generated yet
     /api/map     the reconstructed map (tree_map.json), 404 if not scanned yet
+    /api/compare the map aligned onto the simulated tree, with each LED's error (see
+                 :func:`treemap.workflow.compare_sim`), 404 if there's nothing to compare
     /api/effects the effects the engine can run, with their parameters
-    /api/scans   the saved scans: per angle counts, detections and debug images
-    /api/scan-image/<name>  one of those images (angle_XXX_debug.png etc.)
 Websockets:
     /ws/output   producers (``SimOutput``) send binary frames of led_count × RGB bytes
-    /ws/viewer   browsers receive those frames, plus JSON ``{"type": "reload", "what"}``
-                 messages when the tree, map or scans change on disk, ``{"type":
-                 "engine"}`` state whenever the effects engine changes and ``{"type":
-                 "job"}`` state for background jobs. Browsers may send:
+    /ws/camera   ``?role=phone``: the viewer sends its virtual phone's photos (see
+                 :mod:`treemap.cameras.browser`); ``?role=scan``: scanners receive them
+                 and may send ``{"type": "detections", ...}`` back for the viewers
+    /ws/viewer   browsers receive LED frames, plus JSON ``{"type": "reload", "what"}``
+                 messages when the tree or map change on disk, ``{"type": "engine"}``
+                 state whenever the effects engine changes, ``{"type": "job"}`` state for
+                 background jobs, ``{"type": "status"}`` (who is sending LED frames, how
+                 many phones and scanners are connected) and ``{"type":
+                 "scan.detections"}`` from a running scan. Browsers may send:
                    {"type": "generate", "id", "spec"}  -> {"type": "generated", "id", "ok", ...}
                    {"type": "effect.run", "effect", "params"}
                    {"type": "effect.params", "params"}
                    {"type": "effect.brightness", "value"}
                    {"type": "effect.stop"}
                    {"type": "job.start", "job", "params"}  (see treemap.jobs)
-                   {"type": "job.cancel"}, {"type": "job.continue"}
+                   {"type": "job.cancel"}
                  Rejected requests get {"type": "effect.error" | "job.rejected", "error"}.
 (The websockets HTTP layer only accepts GET, hence commands go over the websocket.)
 
@@ -35,11 +41,13 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from importlib import resources
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -48,7 +56,6 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
 from websockets.http11 import Request, Response
 
-from treemap import workflow
 from treemap.config import Config
 from treemap.effects import ParamError, describe_effects
 from treemap.engine import Engine
@@ -64,6 +71,21 @@ from treemap.sim.tree import (
 )
 
 log = logging.getLogger(__name__)
+
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
+    ".json": "application/json", ".map": "application/json", ".woff2": "font/woff2",
+}
+NOT_BUILT = b"""<!doctype html><meta charset="utf-8"><title>treemap viewer</title>
+<body style="font: 15px system-ui; background: #07090d; color: #d8dee9; padding: 2em">
+<h1>The viewer isn't built yet</h1>
+<p>Run <code>npm --prefix viewer install && npm --prefix viewer run build</code> in the
+project folder, then reload this page.</p>"""
+
+
+def viewer_dir() -> Traversable:
+    return resources.files("treemap.sim").joinpath("viewer_dist")
 
 
 @dataclass
@@ -85,6 +107,8 @@ class SimServer:
     make_jobs: Callable[[SimServer], Jobs] | None = None
 
     viewers: set[ServerConnection] = field(default_factory=set, init=False)
+    phones: set[ServerConnection] = field(default_factory=set, init=False)
+    scanners: set[ServerConnection] = field(default_factory=set, init=False)
     producers: int = field(default=0, init=False)
     sources: dict[ServerConnection, str] = field(default_factory=dict, init=False)
     last_frame: bytes | None = field(default=None, init=False)
@@ -100,8 +124,15 @@ class SimServer:
             return None  # let the websocket handshake proceed
         path = urlsplit(request.path).path
         if path in ("/", "/index.html"):
-            html = resources.files("treemap.sim").joinpath("viewer/index.html").read_bytes()
+            page = viewer_dir().joinpath("index.html")
+            html = page.read_bytes() if page.is_file() else NOT_BUILT
             return _response(HTTPStatus.OK, html, "text/html; charset=utf-8")
+        if path.startswith("/assets/"):
+            name = path.removeprefix("/assets/")
+            asset = viewer_dir().joinpath("assets", name)
+            if re.fullmatch(r"[\w.-]+", name) and asset.is_file():
+                kind = CONTENT_TYPES.get(Path(name).suffix, "application/octet-stream")
+                return _response(HTTPStatus.OK, asset.read_bytes(), kind)
         if path == "/api/config":
             body = {
                 "led_count": self.led_count,
@@ -114,16 +145,8 @@ class SimServer:
                 body["config"] = self.cfg.to_dict()
                 body["config_source"] = str(self.cfg.source) if self.cfg.source else None
                 body["scan_dir"] = str(self.cfg.scan_dir)
+                body["hidden_leds"] = self.cfg.sim_hidden_leds
             return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
-        if path == "/api/scans":
-            if self.cfg is None:
-                return _response(HTTPStatus.NOT_FOUND, b"[]", "application/json")
-            body = json.dumps(workflow.scan_index(self.cfg)).encode()
-            return _response(HTTPStatus.OK, body, "application/json")
-        if path.startswith("/api/scan-image/") and self.cfg is not None:
-            image = workflow.scan_image_path(self.cfg, path.rsplit("/", 1)[1])
-            if image is not None:
-                return _response(HTTPStatus.OK, image.read_bytes(), "image/png")
         if path == "/api/effects":
             body = {
                 "available": self.engine is not None,
@@ -135,6 +158,15 @@ class SimServer:
             return _file_response(self.tree_path, "no sim tree yet: run `treemap sim new`")
         if path == "/api/map":
             return _file_response(self.map_path, "no reconstructed map yet")
+        if path == "/api/compare" and self.cfg is not None:
+            from treemap import workflow
+
+            try:
+                body = workflow.compare_sim(self.cfg)
+            except workflow.WorkflowError as e:
+                return _response(HTTPStatus.NOT_FOUND, json.dumps({"error": str(e)}).encode(),
+                                 "application/json")
+            return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
         return _response(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
 
     # -- websockets ---------------------------------------------------------------------
@@ -145,6 +177,8 @@ class SimServer:
             await self._viewer(ws)
         elif path == "/ws/output":
             await self._producer(ws)
+        elif path == "/ws/camera":
+            await self._camera(ws)
         else:
             await ws.close(code=1008, reason="unknown endpoint")
 
@@ -189,8 +223,6 @@ class SimServer:
                 jobs.start(str(msg.get("job")), msg.get("params") or {})
             elif kind == "job.cancel":
                 jobs.cancel()
-            elif kind == "job.continue":
-                jobs.proceed()
             else:
                 raise JobRejected(f"unknown command {kind!r}")
         except JobRejected as e:
@@ -270,7 +302,33 @@ class SimServer:
         """Who is sending frames. More than one at a time makes the LEDs flicker between
         them, so the viewer warns about it."""
         return {"type": "status", "producers": self.producers,
-                "sources": sorted(self.sources.values())}
+                "sources": sorted(self.sources.values()),
+                "phones": len(self.phones), "scanners": len(self.scanners)}
+
+    async def _camera(self, ws: ServerConnection) -> None:
+        """Relay the viewer's phone photos to scanners, and their detections back."""
+        query = parse_qs(urlsplit(ws.request.path).query) if ws.request else {}
+        role = (query.get("role") or [""])[0]
+        if role not in ("phone", "scan"):
+            await ws.close(code=1008, reason="role must be phone or scan")
+            return
+        group = self.phones if role == "phone" else self.scanners
+        group.add(ws)
+        self._broadcast_json(self._status())
+        try:
+            async for message in ws:
+                if role == "phone" and isinstance(message, bytes):
+                    broadcast(self.scanners, message)
+                elif role == "scan" and isinstance(message, str):
+                    try:
+                        msg = json.loads(message)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(msg, dict) and msg.get("type") == "detections":
+                        self._broadcast_json({**msg, "type": "scan.detections"})
+        finally:
+            group.discard(ws)
+            self._broadcast_json(self._status())
 
     async def _producer(self, ws: ServerConnection) -> None:
         query = parse_qs(urlsplit(ws.request.path).query) if ws.request else {}
@@ -291,10 +349,8 @@ class SimServer:
         broadcast(self.viewers, json.dumps(msg))
 
     async def _watch_files(self) -> None:
-        """Tell viewers to reload when the tree, map or scans are (re)written."""
+        """Tell viewers to reload when the tree or map are (re)written."""
         stamps = {"tree": lambda: _mtime(self.tree_path), "map": lambda: _mtime(self.map_path)}
-        if self.cfg is not None:
-            stamps["scans"] = lambda: _dir_stamp(self.cfg.scan_dir)
         seen = {what: stamp() for what, stamp in stamps.items()}
         while True:
             await asyncio.sleep(self.poll_s)
@@ -397,14 +453,6 @@ def _mtime(path: Path) -> float | None:
         return path.stat().st_mtime_ns
     except FileNotFoundError:
         return None
-
-
-def _dir_stamp(path: Path) -> tuple:
-    """Changes whenever a scan result or override in ``path`` is written."""
-    try:
-        return tuple(sorted((p.name, p.stat().st_mtime_ns) for p in path.glob("*.json")))
-    except FileNotFoundError:
-        return ()
 
 
 def _response(status: HTTPStatus, body: bytes, content_type: str) -> Response:

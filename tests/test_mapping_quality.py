@@ -40,31 +40,27 @@ def test_verify_plane_rises_then_sweeps():
     assert not frames[-1].any()
 
 
-def test_hidden_leds_show_yellow_and_red_and_fix(tmp_path, write_config):
-    write_config(
-        "led_count: 120\ncontrollers: []\n"
-        "sim: {seed: 4, port: 1, hidden_leds: '30, 60-66'}\n"
-    )
+def test_reconstruct_show_and_fix_from_the_cli(tmp_path, write_config):
+    from tests.walk_render import walk_round
+    from treemap.sim.tree import TreeSpec, generate_tree
+
+    write_config("led_count: 400\ncontrollers: []\nsim: {port: 1}\n")
+    tree = generate_tree(TreeSpec.uniform(400), seed=3)
+    walk_round(tree).save(tmp_path / "data/scans/default/round_01.npz")
     runner = CliRunner()
-    for args in (["scan", "--flash", "0"], ["reconstruct"]):
-        result = runner.invoke(app, args)
-        assert result.exit_code == 0, result.output
+    result = runner.invoke(app, ["reconstruct"])
+    assert result.exit_code == 0, result.output
     tree_map = TreeMap.load(tmp_path / "data/tree_map.json")
-    assert tree_map.status[30] == "interpolated"
-    assert set(tree_map.status[60:67]) == {"failed"}
-    assert tree_map.counts()["ok"] > 100
+    assert tree_map.counts()["ok"] > 300
 
     result = runner.invoke(app, ["show-mapping", "--seconds", "0"])
     assert result.exit_code == 0, result.output
-    assert "red: 60-66" in result.output
 
     ok = tree_map.indices("ok")[5]
     result = runner.invoke(app, ["fix", str(ok), "--action", "interpolate"])
     assert result.exit_code == 0, result.output
     assert f"LED {ok} is now interpolated" in result.output
-
-    result = runner.invoke(app, ["fix", str(ok), "--action", "rescan", "--angle", "0",
-                                 "--angle", "90"])
+    result = runner.invoke(app, ["fix", str(ok), "--action", "measure"])
     assert result.exit_code == 0, result.output
     assert f"LED {ok} is now ok" in result.output
 
