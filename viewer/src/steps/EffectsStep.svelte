@@ -1,14 +1,16 @@
 <script lang="ts">
-  import { Square, Sun } from "@lucide/svelte";
+  import { Square, Star, Sun } from "@lucide/svelte";
   import Alert from "../components/ui/Alert.svelte";
   import Button from "../components/ui/Button.svelte";
   import Card from "../components/ui/Card.svelte";
   import Segmented from "../components/ui/Segmented.svelte";
   import StepHeader from "../components/ui/StepHeader.svelte";
   import { runEffect, setBrightness, setEffectMap, stopEffect } from "../lib/actions";
+  import { defaultName, favourites } from "../lib/favourites.svelte";
   import type { MapChoice } from "../lib/types";
   import { app } from "../lib/state.svelte";
   import EffectParams from "./EffectParams.svelte";
+  import FavouritesCard from "./FavouritesCard.svelte";
 
   const effects = $derived(app.effects?.effects ?? []);
   // The Mapping effects live in the Map step; the single-LED one is how LEDs get selected.
@@ -21,6 +23,25 @@
     truth: { label: "True tree", title: "The simulated tree's real positions, to compare against" },
   };
   const mapOptions = $derived((app.engine.maps ?? []).map((m) => ({ value: m, ...MAP_LABELS[m] })));
+
+  // Favourites: is what's playing one of them, or a changed version of the one last started?
+  const favourite = $derived(favourites.find(app.engine.running, app.engine.params));
+  const changedFrom = $derived.by(() => {
+    const last = favourites.list.find((f) => f.id === favourites.lastPlayed);
+    return !favourite && last && last.effect === app.engine.running ? last : null;
+  });
+  function toggleFavourite() {
+    if (!running || !app.engine.params) return;
+    if (favourite) favourites.remove(favourite.id);
+    else favourites.lastPlayed = favourites.add(running.name, app.engine.params, defaultName(running, app.engine.params)).id;
+  }
+  function updateFavourite() {
+    if (changedFrom && app.engine.params) favourites.update(changedFrom.id, app.engine.params);
+  }
+  function runTile(name: string) {
+    favourites.lastPlayed = null;
+    runEffect(name);
+  }
 </script>
 
 <StepHeader title="Effects" description="Light shows that use the mapped positions. Pick one, then tune it." />
@@ -30,10 +51,25 @@
 {:else}
   <Card title="Now playing">
     {#snippet actions()}
-      {#if running}<Button size="sm" variant="danger" icon={Square} onclick={stopEffect}>Stop</Button>{/if}
+      {#if running}
+        <button class="star" class:on={!!favourite} aria-pressed={!!favourite} onclick={toggleFavourite}
+          title={favourite ? `Saved as "${favourite.name}": click to remove it` : "Save as a favourite, with these settings"}>
+          <Star size={15} fill={favourite ? "currentColor" : "none"} />
+        </button>
+        <Button size="sm" variant="danger" icon={Square} onclick={stopEffect}>Stop</Button>
+      {/if}
     {/snippet}
     {#if running}
-      <div class="now"><b>{running.label}</b><span class="muted">{running.description}</span></div>
+      <div class="now">
+        <b>{favourite?.name ?? running.label}</b>
+        <span class="muted">{favourite ? `${running.label}: ` : ""}{running.description}</span>
+      </div>
+      {#if changedFrom}
+        <div class="changed">
+          <span>Changed from <b>{changedFrom.name}</b></span>
+          <Button size="sm" onclick={updateFavourite} title="Save these settings into the favourite">Update it</Button>
+        </div>
+      {/if}
       {#if running.params.length}<EffectParams fx={running} />{/if}
     {:else if app.scanning}
       <p class="muted">The scan is using the LEDs. Effects can run once it's stopped.</p>
@@ -50,6 +86,8 @@
     {#if app.effectError}<Alert tone="bad">{app.effectError}</Alert>{/if}
   </Card>
 
+  <FavouritesCard />
+
   {#each groups as g}
     <Card title={g}>
       {#snippet actions()}
@@ -60,7 +98,7 @@
       <div class="grid">
         {#each effects.filter((e) => e.group === g) as e (e.name)}
           <button class="fx" class:on={app.engine.running === e.name} title={e.description} disabled={app.scanning}
-            onclick={() => runEffect(e.name)}>
+            onclick={() => runTile(e.name)}>
             <b>{e.label}</b>
             <span>{e.description}</span>
           </button>
@@ -74,6 +112,13 @@
   .now { display: flex; flex-direction: column; gap: 2px; font-size: var(--t-sm); }
   .now b { font-size: var(--t-lg); }
   p { margin: 0; font-size: var(--t-sm); }
+  .star { display: grid; place-items: center; width: 28px; height: 26px; cursor: pointer; color: var(--muted);
+    background: transparent; border: 1px solid var(--border); border-radius: var(--r1); }
+  .star:hover { color: var(--text); border-color: var(--border-strong); }
+  .star.on { color: var(--warn); border-color: var(--warn); }
+  .changed { display: flex; align-items: center; justify-content: space-between; gap: var(--s2);
+    font-size: var(--t-sm); color: var(--muted); }
+  .changed b { color: var(--text); font-weight: 600; }
   .bright { display: grid; grid-template-columns: 20px 1fr 44px; align-items: center; gap: var(--s2); color: var(--muted); }
   .bright output { text-align: right; font-size: var(--t-xs); color: var(--text); }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }

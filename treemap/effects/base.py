@@ -204,7 +204,7 @@ class MapEffect(Effect):
 
     def render(self, t: float) -> np.ndarray:
         m = self.tree_map()
-        if m is None:
+        if m is None or not m.geometry.valid.any():
             return self.blank()
         frame = self.render_map(t, m)
         return np.where(m.geometry.valid[:, None], frame, 0.0)

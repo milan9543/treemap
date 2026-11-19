@@ -70,12 +70,18 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
      **Interpolate** fills it in from its neighbours; to measure it better, scan again
      and film that part of the tree.
 4. **Effects**: click an effect to run it. Its controls and the master brightness are
-   under **Now playing**. The **3D** effects (plane, 3D rainbow, spiral, bursts) colour
-   each LED by where it is on the tree; the switch on that card picks their positions:
+   under **Now playing**. The **3D** effects (plane, 3D rainbow, spiral, bursts, ripples,
+   plasma, radar, fireflies, fill up, 3D checkerboard) colour each LED by where it is on
+   the tree; the switch on that card picks their positions:
    the **Scanned map** (what the real tree will use) or, in the simulator, the **True
    tree**. Compare the two to see how much the scan's errors show. The scanned map's
    "front" is wherever the scan started, so effects that turn round the trunk can start
    at a different angle on each.
+
+   Press ☆ in Now playing to keep the running effect, with its settings, under
+   **Favourites**: click one to play it, ✎ to rename it, 🗑 to delete it. If you change
+   a favourite's settings while it plays, **Update it** saves the new ones. Favourites
+   are kept in this browser (localStorage), so they don't follow you to another browser.
 
 The toolbar at the bottom of the 3D view switches between **Truth**, **Scanned** and
 **Compare** (`t` cycles). Compare draws a line from each LED's true position to where the

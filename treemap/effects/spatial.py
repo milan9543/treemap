@@ -16,6 +16,21 @@ from treemap.mapping.model import TreeMap
 TAU = 2 * np.pi
 AXES = {"up": (1, 1), "down": (1, -1), "left-right": (0, 1), "front-back": (2, -1)}
 
+# Colour gradients, dark to bright, for effects that map a 0-1 value to a colour.
+GRADIENTS = {
+    "lava": [(0, 0, 0), (120, 0, 0), (255, 60, 0), (255, 170, 0), (255, 240, 120)],
+    "ocean": [(0, 0, 30), (0, 40, 160), (0, 140, 255), (60, 220, 255), (210, 255, 255)],
+    "forest": [(0, 15, 0), (0, 90, 10), (40, 180, 20), (170, 220, 40), (255, 200, 60)],
+}
+
+
+def gradient(name: str, s: np.ndarray) -> np.ndarray:
+    """Colours 0-255 along a gradient for values ``s`` 0-1 (clipped): ``s.shape + (3,)``."""
+    stops = np.asarray(GRADIENTS[name], dtype=np.float32)
+    x = np.linspace(0, 1, len(stops))
+    s = np.clip(s, 0, 1)
+    return np.stack([np.interp(s, x, stops[:, c]) for c in range(3)], axis=-1).astype(np.float32)
+
 
 def _sweep(phase: float, bounce: bool) -> float:
     """0-1 position of a sweep after ``phase`` passes: a sawtooth, or a triangle."""
@@ -178,3 +193,171 @@ class Sphere(_Effect3D):
             fade = max(1 - radius / self.p["size"], 0.0)
             np.maximum(frame, (shell * fade)[:, None] * rgb, out=frame)
         return frame
+
+
+@register
+class Ripple(_Effect3D):
+    name = "ripple"
+    label = "Ripples"
+    description = "Rings of light spreading through the tree from the top, middle or bottom."
+    params = (
+        Param("origin", "choice", "top", choices=("top", "middle", "bottom")),
+        Param("color", "color", (80, 160, 255)),
+        Param("rainbow", "bool", False, help="every ring its own colour"),
+        Param("speed", "float", 0.8, min=-3, max=3, step=0.05,
+              help="rings per second (negative: they run inwards)"),
+        Param("spacing", "float", 0.3, min=0.05, max=1, step=0.01,
+              help="distance between rings, fraction of the tree height"),
+        Param("sharpness", "float", 6, min=1, max=30, step=0.5, help="higher: thinner rings"),
+    )
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g = m.geometry
+        y = {"top": g.hi[1], "middle": (g.lo[1] + g.hi[1]) / 2, "bottom": g.lo[1]}[self.p["origin"]]
+        dist = np.linalg.norm(g.xyz - np.array([0, y, 0], np.float32), axis=1)
+        phase = dist / self.p["spacing"] - t * self.p["speed"]
+        level = ((1 + np.cos(TAU * phase)) / 2) ** self.p["sharpness"]
+        if self.p["rainbow"]:
+            return level[:, None] * hsv_to_rgb(np.round(phase) * 0.13)
+        return level[:, None] * self.color("color")
+
+
+@register
+class Plasma(_Effect3D):
+    name = "plasma"
+    label = "Plasma"
+    description = "Slowly flowing blobs of colour drifting through the tree in 3D."
+    params = (
+        Param("palette", "choice", "lava", choices=("lava", "ocean", "forest", "rainbow")),
+        Param("speed", "float", 1.0, min=0.05, max=5, step=0.05),
+        Param("scale", "float", 0.5, min=0.1, max=2, step=0.05,
+              help="blob size, fraction of the tree height"),
+    )
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, k, sp = m.geometry, 1 / self.p["scale"], self.p["speed"] * t
+        x, y, z = g.xyz.T
+        v = (np.sin(TAU * (x * k + sp * 0.11))
+             + np.sin(TAU * (y * k * 0.8 - sp * 0.07))
+             + np.sin(TAU * ((x + z) * k * 0.6 + sp * 0.13))
+             + np.sin(TAU * (g.r * k * 1.3 - y * k * 0.4 - sp * 0.09)))
+        s = (v / 4 + 1) / 2  # 0-1
+        if self.p["palette"] == "rainbow":
+            return hsv_to_rgb(s + sp * 0.02)
+        return gradient(self.p["palette"], s * 1.15 - 0.1)  # some LEDs reach black and white
+
+
+@register
+class Radar(_Effect3D):
+    name = "radar"
+    label = "Radar"
+    description = "A beam turning round the trunk, leaving a fading afterglow behind it."
+    params = (
+        Param("color", "color", (0, 255, 90)),
+        Param("background", "color", (0, 0, 0)),
+        Param("speed", "float", 0.4, min=-3, max=3, step=0.01,
+              help="turns per second (negative: the other way)"),
+        Param("trail", "float", 0.3, min=0.02, max=1, step=0.01,
+              help="afterglow length, fraction of a turn"),
+    )
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        speed = self.p["speed"]
+        beam = t * speed  # turns
+        behind = (beam - m.geometry.theta / TAU) % 1.0  # turns since the beam passed
+        if speed < 0:
+            behind = 1.0 - behind
+        level = np.exp(-behind / (self.p["trail"] / 3))[:, None]
+        return level * self.color("color") + (1 - level) * self.color("background")
+
+
+@register
+class Fireflies(_Effect3D):
+    name = "fireflies"
+    label = "Fireflies"
+    description = "Little glowing lights drifting about inside the tree, blinking."
+    params = (
+        Param("color", "color", (190, 255, 40)),
+        Param("count", "int", 8, min=1, max=40, step=1),
+        Param("size", "float", 0.06, min=0.02, max=0.25, step=0.01,
+              help="glow radius, fraction of the tree height"),
+        Param("speed", "float", 1.0, min=0.1, max=4, step=0.05),
+        Param("blink", "bool", True),
+    )
+
+    def setup(self) -> None:
+        super().setup()
+        k = 40  # the most fireflies; each one's own random flight path
+        self.orbit = self.rng.uniform(0.04, 0.15, k) * self.rng.choice([-1, 1], k)  # turns/s
+        self.theta0 = self.rng.uniform(0, TAU, k)
+        self.bob = self.rng.uniform(0.03, 0.09, k)  # height oscillations/s
+        self.phase = self.rng.uniform(0, TAU, (3, k))
+        self.depth = self.rng.uniform(0.75, 1.0, k)  # how far out: near the LEDs on the outside
+        self.blink_rate = self.rng.uniform(0.2, 0.5, k)  # blinks per second
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, n, st = m.geometry, self.p["count"], t * self.p["speed"]
+        lo, hi = g.lo[1], g.hi[1]
+        h = lo + (hi - lo) * (0.5 + 0.42 * np.sin(TAU * self.bob[:n] * st + self.phase[0, :n]))
+        # the tree's outline: how far out the LEDs reach at each height
+        cone = np.percentile(g.r[g.valid] / np.maximum(1.03 * hi - g.h[g.valid], 0.05), 90)
+        r = cone * np.maximum(1.03 * hi - h, 0.0) * self.depth[:n] * (
+            0.85 + 0.15 * np.sin(TAU * 0.13 * st + self.phase[1, :n]))
+        a = self.theta0[:n] + TAU * self.orbit[:n] * st
+        pos = np.stack([r * np.sin(a), h, r * np.cos(a)], axis=1)  # (n, 3); θ = 0 at +z
+        d2 = ((g.xyz[None, :, :] - pos[:, None, :]) ** 2).sum(axis=2)  # (fireflies, LEDs)
+        glow = np.exp(-d2 / (2 * self.p["size"] ** 2))
+        if self.p["blink"]:
+            pulse = np.sin(TAU * self.blink_rate[:n] * t + self.phase[2, :n])
+            glow = glow * np.clip(0.3 + pulse, 0, 1)[:, None]  # on ~60% of the time
+        return np.clip(glow.sum(axis=0), 0, 1)[:, None] * self.color("color")
+
+
+@register
+class Fill(_Effect3D):
+    name = "fill"
+    label = "Fill up"
+    description = "The tree fills with colour from the bottom like a glass, a new colour each time."
+    params = (
+        Param("palette", "choice", "christmas", choices=("christmas", "rainbow")),
+        Param("seconds", "float", 4.0, min=0.5, max=30, step=0.5, help="seconds per fill"),
+        Param("wave", "float", 0.05, min=0, max=0.25, step=0.01,
+              help="how much the surface sloshes, fraction of the tree height"),
+    )
+
+    def _color(self, k: int) -> np.ndarray:
+        if self.p["palette"] == "rainbow":
+            return hsv_to_rgb(np.array([k * 0.17]))[0]
+        return CHRISTMAS[k % len(CHRISTMAS)]
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, wave = m.geometry, self.p["wave"]
+        k, f = divmod(t / self.p["seconds"], 1.0)
+        k = int(k)
+        lo, hi = g.lo[1] - 2 * wave - 0.03, g.hi[1] + 2 * wave + 0.03
+        surface = lo + f * (hi - lo) + wave * np.sin(2 * g.theta + TAU * 0.7 * t) * np.sin(TAU * 0.3 * t)
+        below = np.clip((surface - g.h) / 0.03 + 0.5, 0, 1)[:, None]  # soft edge
+        return below * self._color(k) + (1 - below) * self._color(k - 1)
+
+
+@register
+class Blocks(_Effect3D):
+    name = "blocks"
+    label = "3D checkerboard"
+    description = "The tree cut into cubes of two colours, the whole pattern turning round the trunk."
+    params = (
+        Param("color", "color", (255, 0, 0)),
+        Param("color2", "color", (0, 140, 0), label="Second colour"),
+        Param("size", "float", 0.2, min=0.05, max=0.6, step=0.01,
+              help="cube size, fraction of the tree height"),
+        Param("speed", "float", 0.05, min=-1, max=1, step=0.01, help="turns per second"),
+    )
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, size = m.geometry, self.p["size"]
+        a = TAU * self.p["speed"] * t
+        x, y, z = g.xyz.T
+        xr, zr = x * np.cos(a) - z * np.sin(a), x * np.sin(a) + z * np.cos(a)
+        cells = np.floor(xr / size) + np.floor(y / size) + np.floor(zr / size)
+        first = (cells.astype(int) % 2 == 0)[:, None]
+        return np.where(first, self.color("color"), self.color("color2"))

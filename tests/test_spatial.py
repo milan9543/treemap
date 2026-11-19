@@ -71,3 +71,11 @@ def test_3d_effect_without_a_map_says_what_to_do(tmp_path):
     ctx = EffectContext(n=10, tree_map=MapSource(tmp_path / "map.json", tmp_path / "t.json"))
     with pytest.raises(ParamError, match="true tree"):
         create_effect("rainbow3d", ctx)
+
+
+def test_fill_rises_from_the_bottom_in_a_new_colour():
+    ys = np.linspace(0, 1, 100)
+    m = tree_map(np.stack([0.2 * np.cos(ys * 40), ys, 0.2 * np.sin(ys * 40)], axis=1))
+    fill = create_effect("fill", ctx_for(m), {"seconds": 4, "wave": 0})
+    frame = fill.render(2.0)  # half way through the first fill: red rising over white
+    assert (frame[:30] == (255, 0, 0)).all() and (frame[-30:] == (255, 255, 255)).all()

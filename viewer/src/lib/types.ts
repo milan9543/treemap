@@ -66,6 +66,7 @@ export interface EffectParam {
   name: string;
   label: string;
   kind: "float" | "int" | "bool" | "color" | "choice";
+  default: unknown;
   min?: number;
   max?: number;
   step?: number;
