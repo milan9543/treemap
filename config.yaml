@@ -55,7 +55,9 @@ sim:
     - {leds: 200, length: null, start: auto}
   height: null         # metres; null = random 1.5-2.2
   radius: null         # metres at the base; null = random 0.5-0.8
-  layout: auto         # interleaved | stacked | auto (auto = sometimes stacked, if quirks)
+  layout: auto         # interleaved (strips wound side by side, sharing the gaps between
+                       # turns) | stacked (each strip carries on where the last one ended)
+                       # | auto (auto = sometimes stacked, if quirks)
   quirks: true         # let "auto" settings pick wiring quirks at random
   hidden_leds: null    # LEDs the virtual phone never sees, e.g. "57, 120-127", to try out
                        # show-mapping and fix on bad LEDs

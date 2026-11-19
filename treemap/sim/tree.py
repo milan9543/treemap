@@ -1,13 +1,16 @@
 """Seeded random Christmas tree with LED strips: the simulator's ground truth.
 
 Coordinates are metres: y is up, the trunk runs along the y axis, the floor is y = 0.
-Each strip is wound round the cone as a noisy, irregular spiral whose depth zig-zags
-into and out of the branches. LED positions are resampled at the strip's LED spacing
-along the wire, so neighbouring LEDs are never further apart than that spacing (plus a
-little placement jitter).
+Each strip is wound round the cone as a slightly irregular spiral whose depth zig-zags
+into and out of the branches, the way you'd wind lights by hand: evenly spaced, never
+over other wire. Interleaved strips share the gaps between turns, stacked strips follow
+on from each other. LED positions are resampled at the strip's LED spacing along the
+wire, so neighbouring LEDs are never further apart than that spacing (plus a little
+placement jitter).
 
 What gets generated is described by a :class:`TreeSpec` (strip lengths and LED counts,
-tree size, layout). Anything left unset is randomised from the seed.
+tree size, layout). Anything left unset is randomised from the seed. The branches the
+LEDs hang on are grown in :mod:`treemap.sim.branches`.
 """
 
 from __future__ import annotations
@@ -21,10 +24,12 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from treemap.sim.branches import Branch, grow_branches
+
 if TYPE_CHECKING:
     from treemap.config import Config
 
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3  # 3 added branches; version 2 files get them grown on load
 MAX_SEED = 2**31 - 1
 
 HEIGHT_RANGE = (1.5, 2.2)  # m, random height when unspecified
@@ -50,6 +55,8 @@ LIMITS: dict[str, tuple[float, float]] = {
 MAX_TURN_GAP = 0.35
 TIGHT_GAP = 0.04  # m: warn when neighbouring wire turns are closer than this
 MAX_TURNS = 150
+STACK_GAP = 0.1  # m of bare winding between one stacked strip's end and the next's start
+WOBBLE_SHARE = 0.15  # the wire's height wobble stays under this share of the gap between turns
 
 
 class SpecError(ValueError):
@@ -191,6 +198,7 @@ class SimTree:
     positions: np.ndarray  # (led_count, 3) float64, metres
     spec: TreeSpec = field(default_factory=TreeSpec)  # what was asked for
     warnings: list[str] = field(default_factory=list)
+    branches: list[Branch] = field(default_factory=list)
 
     @property
     def led_count(self) -> int:
@@ -227,11 +235,12 @@ class SimTree:
             "spec": self.spec.to_dict(),
             "warnings": self.warnings,
             "positions": np.round(self.positions, 4).tolist(),
+            "branches": [b.to_dict() for b in self.branches],
         }
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SimTree:
-        if d.get("version") != FORMAT_VERSION:
+        if d.get("version") not in (2, FORMAT_VERSION):
             raise ValueError(
                 f"unsupported sim tree format version {d.get('version')!r}; "
                 "regenerate it with `treemap sim new`"
@@ -239,16 +248,23 @@ class SimTree:
         positions = np.asarray(d["positions"], dtype=np.float64)
         if positions.ndim != 2 or positions.shape[1] != 3:
             raise ValueError(f"positions must be (N, 3), got {positions.shape}")
+        seed, height = int(d["seed"]), float(d["height"])
+        radius, trunk_radius = float(d["radius"]), float(d["trunk_radius"])
+        if "branches" in d:
+            branches = [Branch.from_dict(b) for b in d["branches"]]
+        else:
+            branches = grow_branches(seed, height, radius, trunk_radius, positions)
         return cls(
-            seed=int(d["seed"]),
-            height=float(d["height"]),
-            radius=float(d["radius"]),
-            trunk_radius=float(d["trunk_radius"]),
+            seed=seed,
+            height=height,
+            radius=radius,
+            trunk_radius=trunk_radius,
             layout=str(d["layout"]),
             strands=[Strand(**s) for s in d["strands"]],
             positions=positions,
             spec=TreeSpec.from_dict(d["spec"]),
             warnings=list(d.get("warnings", [])),
+            branches=branches,
         )
 
     def save(self, path: str | Path) -> None:
@@ -309,31 +325,54 @@ def generate_tree(spec: TreeSpec | None = None, seed: int | None = None) -> SimT
     def cone_r(y: np.ndarray) -> np.ndarray:
         return radius * np.clip(1.0 - y / height, 0.0, 1.0)
 
+    # Wire is wound the way you'd do it by hand: evenly, never over itself.
+    # Interleaved (and single) strips all follow one winding, spread evenly round the
+    # trunk so each runs half way between the others' turns; a shorter strip just ends
+    # lower. Stacked strips follow one winding end to end: the next strip carries on a
+    # little above where the last one ran out.
+    w = _winding(rng)
+    spacings = [s.spacing if s.spacing is not None else random_spacing for s in spec.strips]
+    lengths = [(s.leds - 1) * sp for s, sp in zip(spec.strips, spacings)]
+    jitters = [rng.uniform(-JITTER, JITTER, (s.leds, 3)) for s in spec.strips]
+    top_rolls = [rng.random() for _ in spec.strips]
+    per_gap = 1 if layout == "stacked" else n  # strips sharing each gap between turns
+
+    def solve(target: float) -> tuple[float, float]:
+        return _solve_turns(w, target, y_bottom, y_top, MAX_TURN_GAP * per_gap, per_gap,
+                            direction, cone_r, trunk_radius)
+
+    if layout == "stacked":
+        try:
+            turns, top = solve(sum(lengths) + STACK_GAP * (n - 1))
+        except SpecError as e:
+            raise SpecError(f"the strips together: {e}") from None
+        offsets = np.concatenate([[0.0], np.cumsum([L + STACK_GAP for L in lengths])])[:-1]
+        phases = [base_phase] * n
+    else:
+        needed = []
+        for k, L in enumerate(lengths):  # all wind at the pace of the one needing most turns
+            try:
+                needed.append(solve(L)[0])
+            except SpecError as e:
+                raise SpecError(f"strip {k + 1}: {e}") from None
+        turns, top = max(*needed, (y_top - y_bottom) / (MAX_TURN_GAP * n)), y_top
+        offsets = [0.0] * n
+        phases = [base_phase + 2 * np.pi * k / n for k in range(n)]
+    dense = _path(w, turns, y_bottom, top, per_gap, 0.0, direction, cone_r, trunk_radius)
+    reach = (top - y_bottom) / (y_top - y_bottom)  # stacked: how far up they all get
+
     strands: list[Strand] = []
     chunks: list[np.ndarray] = []
     warnings: list[str] = []
     start = 0
     for k, strip in enumerate(spec.strips):
-        if layout == "stacked":
-            band = (y_top - y_bottom) / n
-            y0, y1 = y_bottom + k * band, y_bottom + (k + 1) * band
-            phase = rng.uniform(0, 2 * np.pi)
-        else:
-            y0, y1 = y_bottom, y_top
-            phase = base_phase + 2 * np.pi * k / n
-        spacing = strip.spacing if strip.spacing is not None else random_spacing
-        # Interleaved strips fill each other's gaps, so each may wind n times looser.
-        max_gap = MAX_TURN_GAP * (n if layout == "interleaved" else 1)
-        try:
-            pts, turns, coverage = _strip_positions(
-                rng, strip.leds, spacing, y0, y1, phase, direction, cone_r, trunk_radius,
-                max_gap,
-            )
-        except SpecError as e:
-            raise SpecError(f"strip {k + 1}: {e}") from None
-        top_roll = rng.random()
+        pts, strip_turns, (ya, yb) = _along(dense, w, turns, strip.leds, spacings[k],
+                                            offsets[k], phases[k], y_bottom, top)
+        coverage = reach if layout == "stacked" else (yb - y_bottom) / (y_top - y_bottom)
+        coverage = (1.0 if coverage > 0.995 else coverage) if strip.leds > 1 else 0.0
+        pts = pts + jitters[k]
         from_top = strip.start == "top" or (
-            strip.start == "auto" and spec.quirks and top_roll < 0.3
+            strip.start == "auto" and spec.quirks and top_rolls[k] < 0.3
         )
         if from_top:
             pts = pts[::-1]
@@ -342,15 +381,24 @@ def generate_tree(spec: TreeSpec | None = None, seed: int | None = None) -> SimT
             Strand(
                 start=start,
                 count=strip.leds,
-                spacing=float(spacing),
-                turns=float(turns),
+                spacing=float(spacings[k]),
+                turns=float(strip_turns),
                 coverage=float(coverage),
                 index_from_top=bool(from_top),
                 handedness="ccw" if direction > 0 else "cw",
             )
         )
-        warnings += _strip_warnings(k, strip.leds, spacing, turns, coverage, y1 - y0, layout, n)
+        band = (yb - ya) if layout == "stacked" else (y_top - y_bottom)
+        warnings += _strip_warnings(k, strip.leds, spacings[k], strip_turns,
+                                    1.0 if layout == "stacked" else coverage, band, layout, n)
         start += strip.leds
+    if layout == "stacked" and reach < 0.98:  # (per strip, coverage only means anything
+        # for interleaved strips; stacked ones all fall short together)
+        warnings.insert(0, (
+            f"The strips ({sum(s.leds * sp for s, sp in zip(spec.strips, spacings)):.1f} m "
+            f"together) are too short to spiral round the whole tree: they only reach "
+            f"{reach:.0%} of the way up."
+        ))
 
     positions = np.concatenate(chunks)
     positions[:, 1] = np.clip(positions[:, 1], 0.0, height)
@@ -364,6 +412,7 @@ def generate_tree(spec: TreeSpec | None = None, seed: int | None = None) -> SimT
         positions=positions,
         spec=spec,
         warnings=warnings,
+        branches=grow_branches(seed, height, radius, trunk_radius, positions),
     )
 
 
@@ -392,30 +441,26 @@ def _strip_warnings(
     return out
 
 
-def _strip_positions(
-    rng: np.random.Generator,
-    count: int,
-    spacing: float,
-    y0: float,
-    y1: float,
-    phase: float,
-    direction: float,
-    cone_r,
-    trunk_radius: float,
-    max_gap: float,
-    samples: int = 20000,
-) -> tuple[np.ndarray, float, float]:
-    """LED positions for one strip, ordered from its bottom end up.
+@dataclass
+class _Winding:
+    """The random shape of a wire's spiral, all as functions of the angle travelled
+    ``a`` (or of ``u``, 0-1 along the strip). Drawn before solving, so the solve is
+    deterministic."""
 
-    Returns ``(positions, turns, coverage)``. The number of turns is solved so the wire
-    from the first to the last LED has the right length. A strip too short to wind its
-    band at least every ``max_gap`` metres only covers the lower part of the band.
-    """
-    # Random structure, fixed before solving so the solve is deterministic. Everything
-    # is a function of the angle travelled, `a`.
+    knot_a: np.ndarray  # depth zig-zag: knots alternate deep (into a branch) and shallow
+    knot_depth: np.ndarray
+    warp: np.ndarray  # height reached at each sample of u: turns a little irregular
+    wob_f: np.ndarray  # gentle height and angle wobble (wire sagging between branches)
+    wob_p: np.ndarray
+    wob_y: np.ndarray
+    wob_a: np.ndarray
+
+
+SAMPLES = 20000
+
+
+def _winding(rng: np.random.Generator) -> _Winding:
     max_angle = 2 * np.pi * MAX_TURNS
-
-    # Depth zig-zag: knots alternate deep (into a branch) and shallow (branch tip).
     gaps = rng.uniform(0.25, 0.7, size=int(max_angle / 0.25) + 2)
     knot_a = np.concatenate([[0.0], np.cumsum(gaps)])
     knot_depth = np.where(
@@ -425,81 +470,98 @@ def _strip_positions(
     )
     skip = (np.arange(len(knot_a)) % 2 == 1) & (rng.random(len(knot_a)) < 0.3)
     knot_depth[skip] = rng.uniform(0.8, 0.95, skip.sum())  # sometimes just skims the surface
-
-    # Irregular turn spacing: a smooth monotone warp of height along the strip.
-    warp_knots = np.concatenate([[0.0], np.cumsum(rng.gamma(4.0, 1.0, 24))])
+    # Turn spacing varies a little, as when winding by hand: a smooth monotone warp.
+    warp_knots = np.concatenate([[0.0], np.cumsum(rng.gamma(10.0, 1.0, 24))])
     warp_knots /= warp_knots[-1]
-    warp_u = np.linspace(0, 1, len(warp_knots))
+    warp = np.interp(np.linspace(0, 1, SAMPLES), np.linspace(0, 1, len(warp_knots)), warp_knots)
+    return _Winding(
+        knot_a=knot_a, knot_depth=knot_depth, warp=warp,
+        wob_f=rng.uniform(0.3, 2.5, 4), wob_p=rng.uniform(0, 2 * np.pi, 4),
+        wob_y=rng.uniform(0.004, 0.012, 4), wob_a=rng.uniform(0.02, 0.08, 4),
+    )
 
-    # Gentle height and angle wobble (wire sagging between branches).
-    wob_f = rng.uniform(0.3, 2.5, 4)
-    wob_p = rng.uniform(0, 2 * np.pi, 4)
-    wob_y = rng.uniform(0.004, 0.012, 4)
-    wob_a = rng.uniform(0.02, 0.08, 4)
 
-    jitter = rng.uniform(-JITTER, JITTER, (count, 3))
-    u = np.linspace(0.0, 1.0, samples)
-    warp = np.interp(u, warp_u, warp_knots)
+def _path(w: _Winding, turns: float, y0: float, top: float, per_gap: int, phase: float,
+          direction: float, cone_r, trunk_radius: float) -> np.ndarray:
+    """The wire's spiral from ``y0`` to ``top`` in ``turns`` turns, densely sampled."""
+    u = np.linspace(0.0, 1.0, SAMPLES)
+    a = 2 * np.pi * turns * u
+    a_w = a + (w.wob_a[:, None] * np.sin(w.wob_f[:, None] * a + w.wob_p[:, None])).sum(0)
+    # the height wobble stays well inside the gap to the neighbouring turn of wire
+    gap = (top - y0) / max(turns, 1e-6) / per_gap
+    wob_y = w.wob_y * min(1.0, WOBBLE_SHARE * gap / w.wob_y.sum())
+    y = y0 + (top - y0) * w.warp
+    y = y + (wob_y[:, None] * np.sin(w.wob_f[:, None] * 1.7 * a + w.wob_p[:, None])).sum(0)
+    depth = np.interp(a, w.knot_a, w.knot_depth)
+    r = np.maximum(depth * cone_r(y), trunk_radius + 0.015)
+    theta = phase + direction * a_w
+    return np.stack([r * np.cos(theta), y, r * np.sin(theta)], axis=1)
 
+
+def _length(p: np.ndarray) -> float:
+    return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum())
+
+
+def _solve_turns(
+    w: _Winding, target: float, y0: float, y1: float, max_gap: float, per_gap: int,
+    direction: float, cone_r, trunk_radius: float,
+) -> tuple[float, float]:
+    """``(turns, top)`` for ``target`` metres of wire to fit the band ``y0``-``y1``. Wire
+    too short to wind the band at least every ``max_gap`` metres only reaches ``top`` <
+    ``y1``."""
     def path(turns: float, top: float) -> np.ndarray:
-        a = 2 * np.pi * turns * u
-        a_w = a + (wob_a[:, None] * np.sin(wob_f[:, None] * a + wob_p[:, None])).sum(0)
-        y = y0 + (top - y0) * warp
-        y = y + (wob_y[:, None] * np.sin(wob_f[:, None] * 1.7 * a + wob_p[:, None])).sum(0)
-        depth = np.interp(a, knot_a, knot_depth)
-        r = np.maximum(depth * cone_r(y), trunk_radius + 0.015)
-        theta = phase + direction * a_w
-        return np.stack([r * np.cos(theta), y, r * np.sin(theta)], axis=1)
-
-    def length(p: np.ndarray) -> float:
-        return float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum())
+        return _path(w, turns, y0, top, per_gap, 0.0, direction, cone_r, trunk_radius)
 
     def min_turns(top: float) -> float:
         return max((top - y0) / max_gap, 0.25)
 
-    target = (count - 1) * spacing
-    if count == 1:
-        return path(1.0, y1)[:1] + jitter, 0.0, 0.0
-
-    top = y1
-    if length(path(min_turns(y1), y1)) > target:
+    if target <= 0:
+        return min_turns(y1), y1
+    if _length(path(min_turns(y1), y1)) > target:
         # Too short for the band: find the height it reaches at the loosest winding.
         lo, hi = y0, y1
         for _ in range(40):
             mid = (lo + hi) / 2
-            if length(path(min_turns(mid), mid)) > target:
+            if _length(path(min_turns(mid), mid)) > target:
                 hi = mid
             else:
                 lo = mid
-        top = lo
-        turns = min_turns(top)
-    else:
-        lo, hi = min_turns(y1), max(min_turns(y1) * 2, 2.0)
-        while length(path(hi, y1)) < target:
-            if hi >= MAX_TURNS:
-                fits = length(path(MAX_TURNS, y1)) / spacing
-                raise SpecError(
-                    f"{count} LEDs at {spacing * 100:.1f} cm spacing need "
-                    f"{target + spacing:.0f} m of wire, more than fits on this tree "
-                    f"(about {fits:.0f} LEDs at most). Use fewer LEDs, a shorter strip "
-                    "or a bigger tree."
-                )
-            hi = min(hi * 2, MAX_TURNS)
-        for _ in range(50):
-            mid = (lo + hi) / 2
-            if length(path(mid, y1)) < target:
-                lo = mid
-            else:
-                hi = mid
-        turns = hi
+        return min_turns(lo), lo
+    lo, hi = min_turns(y1), max(min_turns(y1) * 2, 2.0)
+    while _length(path(hi, y1)) < target:
+        if hi >= MAX_TURNS:
+            raise SpecError(
+                f"{target:.0f} m of wire is more than fits on this tree (about "
+                f"{_length(path(MAX_TURNS, y1)):.0f} m at most). Use fewer LEDs, a shorter "
+                "strip or a bigger tree."
+            )
+        hi = min(hi * 2, MAX_TURNS)
+    for _ in range(50):
+        mid = (lo + hi) / 2
+        if _length(path(mid, y1)) < target:
+            lo = mid
+        else:
+            hi = mid
+    return hi, y1
 
-    dense = path(turns, top)
+
+def _along(
+    dense: np.ndarray, w: _Winding, turns: float, count: int, spacing: float, offset: float,
+    phase: float, y0: float, top: float,
+) -> tuple[np.ndarray, float, tuple[float, float]]:
+    """LEDs every ``spacing`` along the winding ``dense`` from ``offset`` metres in,
+    turned ``phase`` round the trunk, until the strip runs out. Returns the positions
+    (bottom end first), the turns the strip makes, and the heights it starts and ends at
+    (leaving out the wobble)."""
     seg = np.linalg.norm(np.diff(dense, axis=0), axis=1)
     s = np.concatenate([[0.0], np.cumsum(seg)])
-    s_led = np.minimum(np.arange(count) * spacing, s[-1])
+    s_led = np.minimum(offset + np.arange(count) * spacing, s[-1])
     pts = np.stack([np.interp(s_led, s, dense[:, i]) for i in range(3)], axis=1)
-    coverage = (top - y0) / (y1 - y0) if y1 > y0 else 1.0
-    return pts + jitter, float(turns), float(coverage)
+    c, sn = np.cos(phase), np.sin(phase)
+    pts[:, 0], pts[:, 2] = pts[:, 0] * c - pts[:, 2] * sn, pts[:, 0] * sn + pts[:, 2] * c
+    u = np.interp(s_led[[0, -1]], s, np.linspace(0.0, 1.0, len(s)))
+    ya, yb = y0 + (top - y0) * np.interp(u, np.linspace(0, 1, len(w.warp)), w.warp)
+    return pts, float(turns * (u[1] - u[0])), (float(ya), float(yb))
 
 
 def _pick(value: float | None, random_value: float) -> float:

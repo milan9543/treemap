@@ -32,6 +32,15 @@ export interface Tree {
   positions: Vec3[];
   spec?: TreeSpec;
   warnings?: string[];
+  branches?: Branch[];
+}
+
+/** A branch of the simulated tree: level 0 main branch (or leader), 1 side branchlet,
+ *  2 twig holding an LED. Points run from its base out to its tip. */
+export interface Branch {
+  level: number;
+  radius: [number, number];
+  points: Vec3[];
 }
 
 export type Status = "ok" | "interpolated" | "failed";

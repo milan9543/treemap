@@ -10,7 +10,7 @@ import * as ws from "./ws";
 
 export async function loadAll(): Promise<void> {
   const [tree, map] = await Promise.all([fetchJson<Tree>("/api/tree"), fetchJson<TreeMapData>("/api/map")]);
-  app.tree = tree && tree.version === 2 ? tree : null; // old format: wait for a regenerate
+  app.tree = tree && tree.version === 3 ? tree : null; // old format: wait for a regenerate
   app.map = map;
   app.compare = app.tree && map ? await fetchJson<CompareData>("/api/compare") : null;
   scene.setData();
@@ -104,7 +104,21 @@ function send(msg: object): boolean {
 }
 
 export function runEffect(name: string, params?: Record<string, unknown>): void {
-  if (send({ type: "effect.run", effect: name, params: params ?? remembered[name] ?? {} })) app.effectError = null;
+  const fitted = fitParams(name, params ?? remembered[name] ?? {});
+  if (send({ type: "effect.run", effect: name, params: fitted })) app.effectError = null;
+}
+
+/** Drop settings the effect no longer has (or no longer accepts, e.g. a colour that's
+ *  now a choice of Christmas colours), so a favourite saved by an older version still
+ *  plays, with defaults for what changed. */
+function fitParams(name: string, params: Record<string, unknown>): Record<string, unknown> {
+  const fx = app.effects?.effects.find((e) => e.name === name);
+  if (!fx) return params;
+  const byName = new Map(fx.params.map((p) => [p.name, p]));
+  return Object.fromEntries(Object.entries(params).filter(([k, v]) => {
+    const p = byName.get(k);
+    return !!p && (p.kind !== "choice" || (p.choices ?? []).includes(v as string));
+  }));
 }
 
 export const stopEffect = () => send({ type: "effect.stop" });

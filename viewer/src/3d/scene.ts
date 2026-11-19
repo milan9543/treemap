@@ -1,8 +1,10 @@
 // The 3D scene: LEDs, cone, trunk, branches and wire path, plus the "photo" scene the
-// virtual phone films (always the true LED positions, with branches, no helpers).
+// virtual phone films (always the true LED positions, with branches, no helpers). The
+// branches are lit by the LEDs; see foliage.ts.
 import * as THREE from "three";
 import { app, mapStatus } from "../lib/state.svelte";
 import type { Vec3 } from "../lib/types";
+import { LightGrid, LOOKS, treeGeometry, treeMeshes, useGrid } from "./foliage";
 
 export const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -100,6 +102,7 @@ export const view = {
 let colorAttr: THREE.BufferAttribute | null = null;
 let hiddenAttr: THREE.BufferAttribute | null = null;
 let wire: THREE.Group | null = null;
+let grid: LightGrid | null = null; // the LEDs' light on the branches
 const compareGroup = new THREE.Group(); // truth -> scanned error lines and markers
 scene.add(compareGroup);
 
@@ -167,6 +170,9 @@ export function rebuild(): void {
     view.points.geometry.dispose();
     view.points = null;
   }
+  grid?.dispose();
+  grid = null;
+  useGrid(null);
   if (wire) {
     scene.remove(wire);
     disposeGroup(wire);
@@ -229,8 +235,11 @@ export function rebuild(): void {
   ground.scale.setScalar(Math.max(R * 1.6, 0.6));
 
   if (tree && view.truthPos) {
-    buildBranches(branches, tree.seed, H, R, tr, 0x0d2216, 0x08150e);
-    buildBranches(photoTree, tree.seed, H, R, tr, 0x07100b, 0x040806);
+    const geom = treeGeometry(tree);
+    branches.add(...treeMeshes(geom, LOOKS.view));
+    photoTree.add(...treeMeshes(geom, LOOKS.photo));
+    grid = new LightGrid(view.truthPos, H, R);
+    useGrid(grid);
     const pg = new THREE.BufferGeometry();
     pg.setAttribute("position", new THREE.BufferAttribute(view.truthPos, 3));
     pg.setAttribute("ledColor", colorAttr);
@@ -267,56 +276,6 @@ function buildCompare(): void {
   compareGroup.add(new THREE.Points(mg, new THREE.PointsMaterial({ vertexColors: true, size: 0.014, sizeAttenuation: true })));
 }
 
-// Seeded PRNG (mulberry32), so a tree always gets the same branches.
-function rng(seed: number): () => number {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-/** Branches that hide LEDs: an opaque core round the trunk (the back of the tree is
- *  hidden from the front) and clumps of needles between the LEDs nearer the surface. */
-function buildBranches(group: THREE.Group, seed: number, H: number, R: number, trunkR: number,
-                       clump: number, core: number): void {
-  const rand = rng(seed * 7919 + 17);
-  const coreMesh = new THREE.Mesh(
-    new THREE.ConeGeometry(R * 0.3, H * 0.96, 32, 1),
-    new THREE.MeshBasicMaterial({ color: core }));
-  coreMesh.position.y = H * 0.48;
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(trunkR, trunkR * 1.2, H * 0.15, 12),
-    new THREE.MeshBasicMaterial({ color: 0x1a120c }));
-  trunk.position.y = H * 0.075;
-  group.add(coreMesh, trunk);
-
-  const count = Math.round(120 * (R / 0.65) * (H / 1.85));
-  const geom = new THREE.IcosahedronGeometry(1, 1);
-  const mesh = new THREE.InstancedMesh(geom, new THREE.MeshBasicMaterial({ color: 0xffffff }), count);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
-  const c = new THREE.Color();
-  for (let k = 0; k < count; k++) {
-    // more clumps low down, where the tree is wider
-    const y = H * (1 - Math.sqrt(rand())) * 0.95;
-    const rAt = R * (1 - y / H);
-    const a = rand() * Math.PI * 2;
-    const d = rAt * (0.45 + 0.5 * rand());
-    const size = (0.03 + 0.045 * rand()) * Math.max(rAt / R, 0.35) + 0.015;
-    e.set(rand() * Math.PI, rand() * Math.PI, rand() * Math.PI);
-    q.setFromEuler(e);
-    m.compose(new THREE.Vector3(d * Math.cos(a), y, d * Math.sin(a)), q,
-      new THREE.Vector3(size * 1.5, size * 0.55, size));
-    mesh.setMatrixAt(k, m);
-    c.setHex(clump).multiplyScalar(0.7 + 0.6 * rand());
-    mesh.setColorAt(k, c);
-  }
-  group.add(mesh);
-}
-
 /** A frame of LED colours (led_count × RGB bytes) from the server. */
 export function applyFrame(buf: ArrayBuffer): void {
   view.lastFrame = buf;
@@ -326,6 +285,7 @@ export function applyFrame(buf: ArrayBuffer): void {
   for (let i = 0; i < n; i++) colors[i] = bytes[i] / 255;
   for (let i = n; i < colors.length; i++) colors[i] = 0;
   if (colorAttr) colorAttr.needsUpdate = true;
+  grid?.update(colors);
   const leds = bytes.length / 3;
   if (app.frameLeds !== leds) app.frameLeds = leds;
 }
@@ -334,7 +294,10 @@ export function setToggle(name: "off" | "cone" | "wire" | "branch", on: boolean)
   if (name === "off") ledMaterial.uniforms.uOffDots.value = on ? 1 : 0;
   else if (name === "cone") decor.visible = on;
   else if (name === "wire" && wire) wire.visible = on;
-  else if (name === "branch") branches.visible = on;
+  else if (name === "branch") {
+    branches.visible = on;
+    ground.visible = !on; // the tree stands on its own floor
+  }
 }
 
 const raycaster = new THREE.Raycaster();

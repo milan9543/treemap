@@ -64,8 +64,10 @@ from treemap.jobs import JobRejected, Jobs
 from treemap.sim.tree import (
     HEIGHT_RANGE,
     LIMITS,
+    FORMAT_VERSION,
     PITCH_RANGE,
     RADIUS_RANGE,
+    SimTree,
     SpecError,
     TreeSpec,
     generate_tree,
@@ -156,7 +158,7 @@ class SimServer:
             }
             return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
         if path == "/api/tree":
-            return _file_response(self.tree_path, "no sim tree yet: run `treemap sim new`")
+            return self._tree_response()
         if path == "/api/map":
             return _file_response(self.map_path, "no reconstructed map yet")
         if path == "/api/compare" and self.cfg is not None:
@@ -169,6 +171,21 @@ class SimServer:
                                  "application/json")
             return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
         return _response(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
+
+    def _tree_response(self) -> Response:
+        """The tree file, with branches grown for one saved by an older version."""
+        response = _file_response(self.tree_path, "no sim tree yet: run `treemap sim new`")
+        if response.status_code != HTTPStatus.OK:
+            return response
+        d = json.loads(response.body)
+        if d.get("version") == FORMAT_VERSION:
+            return response
+        try:
+            body = json.dumps(SimTree.from_dict(d).to_dict(), separators=(",", ":"))
+        except (ValueError, KeyError, TypeError) as e:
+            return _response(HTTPStatus.UNPROCESSABLE_ENTITY, json.dumps({"error": str(e)}).encode(),
+                             "application/json")
+        return _response(HTTPStatus.OK, body.encode(), "application/json")
 
     # -- websockets ---------------------------------------------------------------------
 

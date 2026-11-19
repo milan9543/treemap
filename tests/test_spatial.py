@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from treemap.effects import EffectContext, ParamError, create_effect
+from treemap.effects import EffectContext, ParamError, create_effect, describe_effects
 from treemap.mapping.model import TreeMap
 from treemap.mapping.source import MapSource
 from treemap.sim.tree import TreeSpec, generate_tree
@@ -79,3 +79,35 @@ def test_fill_rises_from_the_bottom_in_a_new_colour():
     fill = create_effect("fill", ctx_for(m), {"seconds": 4, "wave": 0})
     frame = fill.render(2.0)  # half way through the first fill: red rising over white
     assert (frame[:30] == (255, 0, 0)).all() and (frame[-30:] == (255, 255, 255)).all()
+
+
+def test_3d_effects_only_use_christmas_colours():
+    t = generate_tree(TreeSpec.uniform(120), seed=4)
+    m = tree_map(t.normalised_positions())
+    for fx in describe_effects(m.led_count):
+        if fx["group"] != "3D":
+            continue
+        variants = [{}] + [{p["name"]: True} for p in fx["params"] if p["kind"] == "bool"] + [
+            {p["name"]: c} for p in fx["params"] if p["kind"] == "choice" for c in p["choices"]]
+        for params in variants:
+            e = create_effect(fx["name"], ctx_for(m), params)
+            for t_ in (0.3, 1.7, 4.1, 9.0):
+                rgb = e.render(t_)
+                # no blue, purple or cyan: blue never outshines both red and green
+                assert (rgb[:, 2] <= rgb[:, :2].max(axis=1) + 1).all(), (fx["name"], params)
+
+
+def test_background_colours_the_leds_the_animation_leaves_alone():
+    t = generate_tree(TreeSpec.uniform(200), seed=4)
+    m = tree_map(t.normalised_positions())
+    bg = np.array([255, 0, 0]) * 0.5
+    with_bg = [fx["name"] for fx in describe_effects(m.led_count)
+               if fx["group"] == "3D" and any(p["name"] == "background" for p in fx["params"])]
+    assert {"plane", "spiral", "sphere", "ripple", "radar", "fireflies"} <= set(with_bg)
+    for name in with_bg:
+        e = create_effect(name, ctx_for(m), {"background": "red", "background_level": 0.5})
+        frame = e.render(1.7)
+        at_bg = (np.abs(frame - bg).max(axis=1) < 4).mean()
+        assert at_bg > 0.25, name  # most LEDs are untouched and show the background
+        off = create_effect(name, ctx_for(m), {}).render(1.7)
+        assert (np.abs(off).max(axis=1) < 4).mean() > 0.25, name  # default: off

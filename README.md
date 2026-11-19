@@ -11,7 +11,10 @@ where they're still unknown. Walk to the red parts and the next round fills them
 
 Everything also runs in a **simulator**: a random virtual tree in a browser 3D viewer,
 which you walk round in first person while a virtual phone films it. You can try the
-whole workflow (scan, check, fix, run effects) before the hardware arrives.
+whole workflow (scan, check, fix, run effects) before the hardware arrives. The virtual
+tree grows like a fir (whorls of drooping branches covered in needles, the lights clipped
+onto them), and its LEDs light up the branches and the floor round them, in the 3D view
+and, more faintly, in the phone's photos.
 
 > **Status:** the simulator, scanning, mapping checks and the effects engine all work. The WLED output (`output: wled`) and the Android camera
 > (`camera: android`) aren't built yet; see [ROADMAP.md](ROADMAP.md).
@@ -70,9 +73,11 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
      **Interpolate** fills it in from its neighbours; to measure it better, scan again
      and film that part of the tree.
 4. **Effects**: click an effect to run it. Its controls and the master brightness are
-   under **Now playing**. The **3D** effects (plane, 3D rainbow, spiral, bursts, ripples,
+   under **Now playing**. The **3D** effects (plane, 3D colour bands, spiral, bursts, ripples,
    plasma, radar, fireflies, fill up, 3D checkerboard) colour each LED by where it is on
-   the tree; the switch on that card picks their positions:
+   the tree, always in Christmas colours (red, green, gold and white). Those that don't
+   light every LED have a **background** colour, at its own brightness, for the LEDs the
+   animation isn't lighting. The switch on that card picks their positions:
    the **Scanned map** (what the real tree will use) or, in the simulator, the **True
    tree**. Compare the two to see how much the scan's errors show. The scanned map's
    "front" is wherever the scan started, so effects that turn round the trunk can start
@@ -88,7 +93,8 @@ The toolbar at the bottom of the 3D view switches between **Truth**, **Scanned**
 scan put it, coloured green (spot on) to red (5 cm or more off); hover an LED to see its
 error. In the simulator the scanned map is shown aligned onto the truth (best rotation,
 scale and offset). **Layers** shows or hides the unlit LEDs (`o`), the cone (`c`), the
-branches that hide LEDs from the phone (`b`) and the wire path (`w`). Drag to orbit,
+branches and floor, lit by the LEDs (`b`), and the wire path (`w`). LEDs deep in the
+branches still show as a faint glow through the needles. Drag to orbit,
 scroll to zoom, `r` resets the view, `f` toggles walk mode and `[` the sidebar.
 
 ## The same from the command line
@@ -157,7 +163,7 @@ file. The keys you're most likely to change:
 
 | Path | Contents |
 |---|---|
-| `data/sim_tree.json` | The simulated tree: true LED positions and how it was wired. |
+| `data/sim_tree.json` | The simulated tree: true LED positions, how it was wired, and its branches. |
 | `data/scans/<profile>/round_XX.npz` | One scan round: which LED was at which pixel in each photo. |
 | `data/scans/<profile>/overrides.json` | LEDs you asked to interpolate. |
 | `data/tree_map.json` | The result: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. |

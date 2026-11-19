@@ -64,6 +64,7 @@ def test_serves_tree_and_404s(server):
     status, ctype, body = get(server, "/api/tree")
     assert status == 200 and ctype == "application/json"
     assert json.loads(body)["led_count"] == 10
+    assert json.loads(body)["branches"]
     for path in ("/api/map", "/nope"):
         with pytest.raises(urllib.error.HTTPError) as e:
             get(server, path)

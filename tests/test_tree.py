@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from treemap.config import config_from_dict
+from treemap.sim.branches import MAIN, TWIG, TWIG_FROM
 from treemap.sim.tree import (
     HEIGHT_RANGE,
     PITCH_RANGE,
@@ -106,6 +107,31 @@ def test_depth_zigzags_into_branches(trees):
         low = y < 0.7 * t.height  # ignore the narrow tip
         assert np.percentile(depth[low], 10) < 0.65
         assert np.percentile(depth[low], 90) > 0.85
+
+
+def nearest_other_wire(t):
+    """For each LED, the distance to the nearest LED on another run of wire: another
+    strip, or its own strip more than 25 cm of wire away."""
+    from scipy.spatial import cKDTree
+
+    strip = np.concatenate([[k] * s.count for k, s in enumerate(t.strands)])
+    index = np.concatenate([np.arange(s.count) for s in t.strands])
+    window = np.concatenate([[int(0.25 / s.spacing) + 1] * s.count for s in t.strands])
+    out = np.full(t.led_count, np.inf)
+    for i, near in enumerate(cKDTree(t.positions).query_ball_point(t.positions, 0.2)):
+        other = [j for j in near if strip[j] != strip[i] or abs(index[j] - index[i]) > window[i]]
+        if other:
+            out[i] = np.linalg.norm(t.positions[other] - t.positions[i], axis=1).min()
+    return out
+
+
+@pytest.mark.parametrize("layout", ["interleaved", "stacked"])
+def test_wire_never_lies_on_top_of_other_wire(layout):
+    for seed in range(1, 9):
+        t = generate_tree(TreeSpec.uniform(600, 3, layout=layout), seed=seed)
+        near = nearest_other_wire(t)
+        assert (near < 0.03).mean() < 0.02, f"seed {seed}"
+        assert near.min() > 0.015, f"seed {seed}"
 
 
 def test_index_from_top_quirk_matches_positions(trees):
@@ -290,6 +316,32 @@ def test_save_load_roundtrip(tmp_path):
     assert loaded.to_dict() == t.to_dict()
     assert loaded.spec == t.spec
     assert np.allclose(loaded.positions, t.positions, atol=1e-4)
+
+
+def test_branch_tips_reach_the_cone_and_every_led_hangs_on_a_branch(trees):
+    for t in trees[:8]:
+        tips = np.array([b.points[-1] for b in t.branches if b.level == MAIN])
+        r = np.hypot(tips[:, 0], tips[:, 2])
+        over = r - t.cone_radius_at(tips[:, 1])
+        assert over.max() < 0.03 and np.median(over) > -0.1, f"seed {t.seed}"
+        ends = np.concatenate([b.points for b in t.branches])
+        nearest = np.linalg.norm(t.positions[:, None] - ends[None], axis=2).min(1)
+        # every LED is on a branch point, or close to a segment (within TWIG_FROM)
+        assert nearest.max() < TWIG_FROM + 0.06, f"seed {t.seed}"
+        twig_tips = np.array([b.points[-1] for b in t.branches if b.level == TWIG])
+        assert np.isin(twig_tips.round(6), t.positions.round(6)).all(1).all()
+
+
+def test_version_2_files_get_the_same_branches():
+    t = generate_tree(seed=9)
+    d = t.to_dict()
+    d["version"] = 2
+    del d["branches"]
+    grown = SimTree.from_dict(d).branches  # from the saved (rounded) sizes
+    assert len(grown) == len(t.branches)
+    # twigs may start from another branch when an LED is almost equally near two
+    assert all(np.allclose(a.points, b.points, atol=1e-3)
+               for a, b in zip(grown, t.branches) if a.level != TWIG)
 
 
 def test_load_rejects_unknown_version():

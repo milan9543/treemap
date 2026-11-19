@@ -47,7 +47,7 @@ class App {
   sidebar = $state(saved("sidebar", true));
   settings = $state(false);
   viewMode = $state<ViewMode>("truth");
-  layers = $state<Record<Layer, boolean>>(saved("layers", { off: true, cone: true, branch: false, wire: false }));
+  layers = $state<Record<Layer, boolean>>(saved("layers", { off: true, cone: false, branch: true, wire: false }));
   selectedLed = $state<number | null>(null);
   walking = $state(false);
   locked = $state(false); // pointer captured for mouse look
