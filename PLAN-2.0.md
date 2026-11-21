@@ -190,6 +190,15 @@ status as one letter (o, i, f).
 
 ## Phase 3: scan page, first usable version
 
+**Built** (2026-11-21): [scanapp/](scanapp/), screens for connect, wiring check and scan.
+Tested on this Mac in headless Chrome 157 with its fake camera against `treemap serve
+--sim`: chase and single LED, countdown, rounds, results and Stop all work, and 20–22 fps
+uploads with no bad frames. The fake camera shows no LEDs, so nothing was identified.
+**Not deployed yet**: `treemap-scan.pages.dev` is the intended address, already the
+default origin and the link `treemap serve` prints. Still to check on the phone: 3.1 once
+deployed, and 3.4's flat scan. Changes from the sketch: `/scan/state` sends `led_status`
+and `counts` after a stopped or finished scan too, but only for a map that scan made.
+
 - **3.1 Project setup.** A new `scanapp/` (Vite + Svelte + TypeScript, like the viewer),
   deployed to Cloudflare Pages on every push. Reads `?server=` and remembers it.
   **Done when:** the page loads from Cloudflare Pages and shows the server's `/info`.

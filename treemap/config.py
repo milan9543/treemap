@@ -102,7 +102,8 @@ class SimConfig:
     port: int = 8765
 
 
-DEFAULT_ORIGINS = ("https://treemap-spike.pages.dev", "http://localhost:5173")
+SCAN_PAGE = "https://treemap-scan.pages.dev"  # the hosted scan page (scanapp/)
+DEFAULT_ORIGINS = (SCAN_PAGE, "https://treemap-spike.pages.dev", "http://localhost:5173")
 
 
 @dataclass

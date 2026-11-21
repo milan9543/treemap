@@ -8,7 +8,8 @@ POST    /play             ``{"effect", "params"}``: run an effect
 POST    /scan/start       ``{"shape", "symbol_ms", "brightness", "rounds"}``, all optional
 POST    /scan/stop        stop the scan; finished rounds are kept
 GET     /scan/state       phase, round, time left, LEDs identified, per-status counts;
-                          after a round, ``led_status``: one letter per LED (o ok,
+                          after a round (and once the scan is done or stopped, if it
+                          made a map), ``led_status``: one letter per LED (o ok,
                           i interpolated, f failed)
 POST    /scan/frames      a batch of camera frames (see :mod:`treemap.cameras.http`)
 ======  ================  ==============================================================
@@ -22,6 +23,7 @@ from __future__ import annotations
 import socket
 import time
 from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -71,6 +73,7 @@ class Api:
             gamma=cfg.gamma,
         )
         self.leds = LedCommands(output, self._status_frame)
+        self._scan_started: datetime | None = None  # when the latest scan started (UTC)
         self.jobs = Jobs(cfg, shared, stop_effects=self._free_leds, camera=self.camera,
                          camera_id=CAMERA_ID)
         self.router = Router()
@@ -168,10 +171,12 @@ class Api:
             raise HttpError(400, f"unknown setting(s): {', '.join(sorted(unknown))}")
         if self.jobs.busy:
             raise HttpError(409, f"a {self.jobs.state()['kind']} is already running")
+        started = datetime.now(timezone.utc)
         try:
             job = self.jobs.start("scan", body)
         except JobRejected as e:
             raise HttpError(400, str(e)) from None
+        self._scan_started = started
         self.leds.mode = None
         return 202, {"id": job}
 
@@ -193,11 +198,24 @@ class Api:
         }
         if progress.get("message"):
             out["message"] = progress["message"]
-        if progress.get("phase") == "status" or st["status"] == "done":
+        if progress.get("phase") == "status" or st["status"] in ("done", "cancelled"):
             tree_map = self._load_map()
-            if tree_map is not None and tree_map.led_count == self.n:
+            if tree_map is not None and tree_map.led_count == self.n and self._made_by_scan(tree_map):
                 out["led_status"] = "".join(STATUS_LETTERS.get(str(s), "f") for s in tree_map.status)
+                out["counts"] = tree_map.counts()
         return out
+
+    def _made_by_scan(self, tree_map: TreeMap) -> bool:
+        """Whether the map came from the latest scan (not one from before it, which a scan
+        that found nothing leaves in place)."""
+        if self._scan_started is None:
+            return False
+        try:
+            created = datetime.fromisoformat(tree_map.meta["created"])
+            # `created` is to the second, and a scan takes seconds before its first map
+            return created > self._scan_started.replace(microsecond=0)
+        except (KeyError, TypeError, ValueError):
+            return False
 
     def scan_frames(self, req: Request) -> dict[str, Any]:
         if req.content_type != "application/octet-stream":

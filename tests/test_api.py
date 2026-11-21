@@ -158,3 +158,10 @@ def test_a_scan_through_the_api(serve):
     assert info["map"]["fits"] and info["map"]["shape"] == "tree"
     assert call(base + "/scan/frames", raw=b"\x09\x00\x00\x00abc",
                 ctype="application/octet-stream")[0] == 400
+
+    # A scan stopped before it made a map doesn't pass the old map off as its own.
+    assert call(base + "/scan/start", {"rounds": 1})[0] == 202
+    call(base + "/scan/stop", {})
+    assert api.jobs.wait(10)
+    st = call(base + "/scan/state")[2]
+    assert st["status"] == "cancelled" and "led_status" not in st

@@ -59,8 +59,9 @@ server:
   host: 0.0.0.0        # every network interface, so the phone can reach it
   port: 8765           # with output: sim, use another port than sim.port
   origins:             # web pages allowed to use it from a browser; "*" allows any
+    - https://treemap-scan.pages.dev   # the scan page
     - https://treemap-spike.pages.dev
-    - http://localhost:5173
+    - http://localhost:5173            # the scan page in development (scanapp/)
 
 # The simulated tree (also editable in the viewer's Tree panel). null = random.
 sim:

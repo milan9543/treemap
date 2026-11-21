@@ -249,6 +249,23 @@ of the configured ones (on port 8766 when the viewer has 8765), and `treemap sim
 --serve` opens the viewer with its virtual phone filming for that server too. Walk round
 the tree (`f`) and start a scan through the API; the phone inset shows the round.
 
+### The scan page
+
+The phone's side is a web page, **<https://treemap-scan.pages.dev/>** (source in
+[scanapp/](scanapp/)). `treemap serve` prints a link to it with the server's address
+filled in (`?server=http://<ip>:8765`). Open it in **Chrome on an Android phone** on the
+same Wi-Fi, and allow it to reach devices on your local network when Chrome asks. Then:
+
+1. **Connect:** the page shows the server, the LEDs and the current map. Pick **tree**
+   or **flat**.
+2. **Check the wiring:** a light runs from the first LED to the last; if it doesn't run
+   in order, fix the `controllers` list. You can also light one LED by number.
+3. **Scan:** the page films with the rear camera (it picks the main lens, the one with
+   continuous focus) and uploads the frames while the server runs the rounds. The page
+   shows each round's progress and result; **Stop** keeps the rounds already finished.
+
+Exposure is automatic for now; locking it from the page comes in Phase 4 of the plan.
+
 ## Real camera: an Android phone
 
 The scan films through the [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam)
@@ -354,6 +371,18 @@ npm --prefix viewer run dev   # viewer with hot reload; keep `treemap sim view` 
 
 `npm run dev` serves the viewer at <http://localhost:5173/> and forwards the API and
 websockets to the Python server on port 8765 (or `TREEMAP_PORT`).
+
+The scan page (`scanapp/`, Vite + Svelte 5 + TypeScript) talks to `treemap serve` across
+origins, as it does from Cloudflare Pages:
+
+```sh
+treemap serve --sim                 # on 8766 if the viewer has 8765
+npm --prefix scanapp run dev        # http://localhost:5173/?server=http://127.0.0.1:8766
+```
+
+`localhost` counts as a secure page, so the camera works there too (on a laptop, its
+webcam). `npm --prefix scanapp run build` writes `scanapp/dist/`, which is what Cloudflare
+Pages serves.
 
 The Python code is in `treemap/`; the viewer (Vite + Svelte 5 + TypeScript + three.js) is in
 `viewer/src/` and builds into `treemap/sim/viewer_dist/`. In the viewer, `lib/` holds the

@@ -17,7 +17,7 @@ import typer
 import yaml
 
 from treemap import __version__
-from treemap.config import CONFIG_ENV_VAR, Config, ConfigError, load_config
+from treemap.config import CONFIG_ENV_VAR, SCAN_PAGE, Config, ConfigError, load_config
 
 app = typer.Typer(
     help="Map the 3D positions of WLED Christmas tree LEDs and run position-aware effects.",
@@ -516,6 +516,9 @@ def serve(
     typer.secho(f"treemap serve on {base}  (Ctrl-C to stop)", fg=typer.colors.GREEN)
     typer.echo(f"  {api.n} LEDs on {_output_label(cfg)}; API at {base}/api/v1/info")
     typer.echo(f"  pages allowed to use it: {', '.join(cfg.server.origins) or 'none'}")
+    if SCAN_PAGE in cfg.server.origins or "*" in cfg.server.origins:
+        typer.secho(f"  scan page (Chrome on an Android phone): {SCAN_PAGE}/?server={base}",
+                    bold=True)
     if sim:
         typer.echo("  to scan the simulated tree through the API: `treemap sim view --serve`, "
                    "walk round it (f), then POST /api/v1/scan/start")
