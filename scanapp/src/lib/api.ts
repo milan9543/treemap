@@ -38,6 +38,17 @@ export interface ScanState {
   counts: Counts | null;
   frames_received: number;
   led_status?: string; // one letter per LED: o ok, i interpolated, f failed
+  colours: ColourCheck | null; // once measured, for the rest of the scan
+}
+
+export type ColourName = "red" | "green" | "blue" | "white";
+
+/** How the phone sees the code's colours, measured in the scan's "colours" phase. */
+export interface ColourCheck {
+  ok: boolean; // every colour read right often enough (85%)
+  read_right: Record<ColourName, number | null>; // share, 0-1; null: not seen
+  seen: Record<ColourName, number>; // LEDs seen per frame
+  tips: string[];
 }
 
 export class ApiError extends Error {
@@ -111,9 +122,14 @@ export class Api {
 
   info = () => this.call<Info>("GET", "/info");
   leds = (cmd: Record<string, unknown>) => this.call<{ mode: string; seconds?: number }>("POST", "/leds", cmd);
-  scanStart = (settings: { shape: Shape; rounds?: number }) =>
+  scanStart = (settings: { shape: Shape; rounds?: number; camera?: string }) =>
     this.call<{ id: number }>("POST", "/scan/start", settings);
   scanStop = () => this.call<{ stopping: boolean }>("POST", "/scan/stop", {});
   scanState = () => this.call<ScanState>("GET", "/scan/state");
   frames = (batch: ArrayBuffer) => this.call<{ frames: number }>("POST", "/scan/frames", batch);
+  /** How many LEDs the frames taken at `since` or later show (median per frame). */
+  exposureProbe = (since: number, frames = 6) =>
+    this.call<{ frames: number; leds: number }>("POST", "/scan/exposure-probe", { since, frames });
+  cameraReady = (body: { message: string; settings: Record<string, unknown> }) =>
+    this.call<{ ok: boolean }>("POST", "/scan/camera-ready", body);
 }

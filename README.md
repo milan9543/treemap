@@ -236,9 +236,11 @@ address. The API is under `/api/v1`:
 | `GET /info` | API version, the LEDs and controllers, the current map, what's using the LEDs, engine timing |
 | `POST /leds` | A test pattern: `{"mode": "chase"}`, `off`, `white`, `solid` (`color`), `led` (`index`), `status` |
 | `POST /play` | Run an effect: `{"effect": "rainbow", "params": {}}` |
-| `POST /scan/start`, `/scan/stop` | Start or stop a scan (`shape`, `symbol_ms`, `brightness`, `rounds`, all optional) |
-| `GET /scan/state` | The scan's phase, round, time left and counts; after a round, each LED's status |
+| `POST /scan/start`, `/scan/stop` | Start or stop a scan (`shape`, `symbol_ms`, `brightness`, `rounds`, `camera`, all optional; `camera` makes the scan set the phone up first) |
+| `GET /scan/state` | The scan's phase, round, time left and counts; after a round, each LED's status; once measured, the phone's colours |
 | `POST /scan/frames` | Camera frames from the page (`application/octet-stream`) |
+| `POST /scan/exposure-probe` | `{"since": t}`: how many LEDs the frames taken since `t` (the frames' clock) show |
+| `POST /scan/camera-ready` | The page has set the phone's exposure; the scan goes on to the colours |
 
 For example, `curl -X POST -H 'Content-Type: application/json' -d '{"mode":"chase"}'
 http://<server>:8765/api/v1/leds` does what `treemap test chase` does. Browsers may only
@@ -264,7 +266,13 @@ same Wi-Fi, and allow it to reach devices on your local network when Chrome asks
    continuous focus) and uploads the frames while the server runs the rounds. The page
    shows each round's progress and result; **Stop** keeps the rounds already finished.
 
-Exposure is automatic for now; locking it from the page comes in Phase 4 of the plan.
+Each scan first sets the phone up. While the LEDs glow white, the page tries exposures
+from shortest to longest, and the server counts the LEDs in each. The page keeps the
+shortest exposure that shows nearly all of them and locks the white balance. Phones
+without manual exposure let automatic exposure settle, then lock it. Next, the server
+shows red, green, blue and white in turn and measures how this phone sees each colour.
+It keeps the result per phone (model and camera) in `data/camera_colours/`, and the page
+shows the share of each colour read right (85% passes).
 
 ### A virtual WLED: scan your screen
 

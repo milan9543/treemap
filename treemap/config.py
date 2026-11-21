@@ -193,6 +193,14 @@ class Config:
         """The camera's measured colours, written by ``treemap camera check``."""
         return self.resolve(Path("data") / "camera_colours.json")
 
+    def colours_path_for(self, camera_id: str | None) -> Path:
+        """Where ``camera_id``'s measured colours are kept: the configured camera's in
+        :attr:`colours_path`, each phone of the scan page's in a file of its own."""
+        if camera_id is None or camera_id == self.camera_id:
+            return self.colours_path
+        slug = re.sub(r"[^a-z0-9]+", "-", camera_id.lower()).strip("-")[:80] or "camera"
+        return self.resolve(Path("data") / "camera_colours" / f"{slug}.json")
+
     @property
     def camera_id(self) -> str:
         """Which camera measured colours belong to."""

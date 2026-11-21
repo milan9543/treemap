@@ -5,14 +5,28 @@ GET     /info             API and server version, the LEDs and controllers, the 
                           map, what's using the LEDs, engine timing, frames received
 POST    /leds             a test pattern (see :mod:`treemap.api.leds`)
 POST    /play             ``{"effect", "params"}``: run an effect
-POST    /scan/start       ``{"shape", "symbol_ms", "brightness", "rounds"}``, all optional
+POST    /scan/start       ``{"shape", "symbol_ms", "brightness", "rounds", "camera"}``,
+                          all optional; ``camera`` names the phone, see below
 POST    /scan/stop        stop the scan; finished rounds are kept
 GET     /scan/state       phase, round, time left, LEDs identified, per-status counts;
                           after a round (and once the scan is done or stopped, if it
                           made a map), ``led_status``: one letter per LED (o ok,
-                          i interpolated, f failed)
+                          i interpolated, f failed); once measured, ``colours``
 POST    /scan/frames      a batch of camera frames (see :mod:`treemap.cameras.http`)
+POST    /scan/exposure-probe
+                          ``{"since", "frames"}``: how many LEDs the frames taken at
+                          ``since`` or later (the phone's clock) show, median per frame
+POST    /scan/camera-ready
+                          ``{"message", "settings"}``: the phone has set its exposure
 ======  ================  ==============================================================
+
+A scan started with ``camera`` (the page sends the phone's model and camera label) sets
+the phone up first: after the countdown, in phase ``exposure``, the LEDs show white at
+the scan's brightness while the page tries exposures, asking ``exposure-probe`` how many
+LEDs each one shows, and keeps the shortest that shows nearly all; it then calls
+``camera-ready``. In phase ``colours`` the server measures how the phone sees each colour
+of the code and keeps that per phone (``colours`` in the state: the share read right
+per colour, whether all pass, tips). Then the rounds start.
 
 One thing drives the LEDs at a time. A test pattern or an effect replaces whichever of
 the two was showing; a scan stops both, and neither can start until the scan is over.
@@ -21,7 +35,9 @@ the two was showing; a scan stops both, and neither can start until the scan is 
 from __future__ import annotations
 
 import socket
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
@@ -32,6 +48,8 @@ from treemap import __version__
 from treemap.api.http import HttpError, Request, Router
 from treemap.api.leds import CommandError, LedCommands
 from treemap.cameras.http import BatchError, HttpCamera
+from treemap.scan.track import find_blobs
+from treemap.workflow import WorkflowError
 from treemap.config import Config
 from treemap.effects import EffectContext, ParamError
 from treemap.engine import Engine
@@ -45,6 +63,8 @@ API_VERSION = 1
 PREFIX = "/api/v1"
 CAMERA_ID = "browser"  # whose measured colours a scan from the page reads by
 STATUS_LETTERS = {"ok": "o", "interpolated": "i", "failed": "f"}
+READY_TIMEOUT_S = 90.0  # for the page to set the phone's exposure
+PROBE_TIMEOUT_S = 3.0  # for the frames an exposure probe asks for to arrive
 
 
 class SharedOutput(LedOutput):
@@ -74,8 +94,11 @@ class Api:
         )
         self.leds = LedCommands(output, self._status_frame)
         self._scan_started: datetime | None = None  # when the latest scan started (UTC)
+        self._ready = threading.Event()  # the page has set the phone's exposure
+        self._ready_info: dict[str, Any] = {}
+        self._probing = threading.Lock()
         self.jobs = Jobs(cfg, shared, stop_effects=self._free_leds, camera=self.camera,
-                         camera_id=CAMERA_ID)
+                         camera_id=CAMERA_ID, camera_ready=self._wait_camera_ready)
         self.router = Router()
         for method, path, handler in (
             ("GET", "/info", self.info),
@@ -85,6 +108,8 @@ class Api:
             ("POST", "/scan/stop", self.scan_stop),
             ("GET", "/scan/state", self.scan_state),
             ("POST", "/scan/frames", self.scan_frames),
+            ("POST", "/scan/exposure-probe", self.exposure_probe),
+            ("POST", "/scan/camera-ready", self.camera_ready),
         ):
             self.router.add(method, PREFIX + path, handler)
 
@@ -166,12 +191,13 @@ class Api:
 
     def scan_start(self, req: Request) -> tuple[int, dict[str, Any]]:
         body = req.json()
-        unknown = set(body) - {"shape", "symbol_ms", "brightness", "rounds"}
+        unknown = set(body) - {"shape", "symbol_ms", "brightness", "rounds", "camera"}
         if unknown:
             raise HttpError(400, f"unknown setting(s): {', '.join(sorted(unknown))}")
         if self.jobs.busy:
             raise HttpError(409, f"a {self.jobs.state()['kind']} is already running")
         started = datetime.now(timezone.utc)
+        self._ready.clear()
         try:
             job = self.jobs.start("scan", body)
         except JobRejected as e:
@@ -195,6 +221,7 @@ class Api:
             **{k: progress.get(k) for k in ("phase", "round", "remaining", "frames",
                                             "identified", "counts")},
             "frames_received": self.camera.received,
+            "colours": st.get("colours"),
         }
         if progress.get("message"):
             out["message"] = progress["message"]
@@ -224,6 +251,52 @@ class Api:
             return {"frames": self.camera.push(req.body)}
         except BatchError as e:
             raise HttpError(400, str(e)) from None
+
+    # -- setting the phone up ---------------------------------------------------------
+
+    def _waiting_for_camera(self) -> bool:
+        return self.jobs.uses_leds and (self.jobs.state().get("progress") or {}).get(
+            "phase") == "exposure"
+
+    def exposure_probe(self, req: Request) -> dict[str, Any]:
+        body = req.json()
+        since, count = body.get("since"), body.get("frames", 6)
+        if isinstance(since, bool) or not isinstance(since, (int, float)):
+            raise HttpError(400, "since must be a time in seconds on the phone's clock")
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 24:
+            raise HttpError(400, "frames must be a whole number 1-24")
+        if self.jobs.uses_leds and not self._waiting_for_camera():
+            raise HttpError(409, "the scan is reading the camera")
+        if not self._probing.acquire(blocking=False):
+            raise HttpError(409, "another probe is running")
+        try:
+            frames = self.camera.frames_since(float(since), count, PROBE_TIMEOUT_S)
+            counts = [len(find_blobs(f.image)) for f in frames]
+        finally:
+            self._probing.release()
+        return {"frames": len(frames), "leds": int(np.median(counts)) if counts else 0}
+
+    def camera_ready(self, req: Request) -> dict[str, Any]:
+        body = req.json()
+        message, settings = body.get("message"), body.get("settings") or {}
+        if message is not None and (not isinstance(message, str) or len(message) > 1000):
+            raise HttpError(400, "message must be text")
+        if not isinstance(settings, dict):
+            raise HttpError(400, "settings must be an object")
+        if not self._waiting_for_camera():
+            raise HttpError(409, "no scan is waiting for the camera")
+        self._ready_info = {"message": message, "settings": settings}
+        self._ready.set()
+        return {"ok": True}
+
+    def _wait_camera_ready(self, check_cancel: Callable[[], None]) -> dict[str, Any]:
+        end = time.monotonic() + READY_TIMEOUT_S
+        while not self._ready.wait(0.25):
+            check_cancel()
+            if time.monotonic() > end:
+                raise WorkflowError("the phone didn't set its exposure: is the scan page "
+                                    "still open?")
+        return self._ready_info
 
     # -- lifecycle ----------------------------------------------------------------------
 

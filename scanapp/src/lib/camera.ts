@@ -2,7 +2,7 @@
 //
 // `facingMode: "environment"` can give the fixed-focus wide lens (it did on a Galaxy S23),
 // so the main camera is picked by hand: the first rear camera with continuous focus. The
-// choice is remembered. Exposure stays automatic for now (Phase 4 locks it).
+// choice is remembered. The scan sets the exposure for the LEDs (see exposure.ts).
 
 import { save } from "./state.svelte";
 

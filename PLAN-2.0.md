@@ -237,6 +237,21 @@ streamed effects at 40 fps; the page shows them, walks, and makes new layouts.
 
 ## Phase 4: exposure and colours from the phone
 
+**Built** (2026-11-21), but not yet tried on the phone or in a browser. A scan started
+with `camera` (the phone's model and camera label) gets two new phases after the
+countdown. In **exposure**, the LEDs show white at the scan's brightness while the page
+runs its search ([scanapp/src/lib/exposure.ts](scanapp/src/lib/exposure.ts)) and then
+calls `POST /scan/camera-ready`. The server gives up after 90 s. In **colours**, the
+server runs the existing colour check on the uploaded frames and saves the result to
+`data/camera_colours/<phone>.json`. `/scan/state` then has `colours`: the share read
+right per colour, whether all pass, and tips. Changes from the sketch:
+- `exposure-probe` takes `{since, frames}`, and `since` is on the frames' own clock. The
+  encoder worker reports the newest frame's time (`mark`), so frames taken before a
+  change aren't counted.
+- The colour check waits 1 s after each change instead of 0.6 s, because frames from the
+  page arrive in batches.
+Still to check on the phone: 4.3's 85% bar.
+
 - **4.1 Exposure probe.** `POST /scan/exposure-probe` counts the LEDs in recent frames.
 - **4.2 Exposure search on the page.** Shortest exposure first; keep the shortest that sees
   nearly as many LEDs as the best. Fallback: auto, settle, lock.

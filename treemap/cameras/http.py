@@ -86,6 +86,17 @@ class HttpCamera(Camera):
             log.warning("dropped a bad frame from the phone: %s", e)
             return None
 
+    def frames_since(self, since: float, count: int, timeout: float) -> list[Frame]:
+        """Up to ``count`` frames taken at ``since`` or later (the phone's clock), waiting
+        up to ``timeout`` seconds for them; older frames are dropped."""
+        frames: list[Frame] = []
+        end = time.monotonic() + timeout
+        while len(frames) < count and (left := end - time.monotonic()) > 0:
+            f = self.read(min(left, 0.1))
+            if f is not None and f.t >= since:
+                frames.append(f)
+        return frames
+
     def drain(self) -> None:
         with self._ready:
             self._queue.clear()

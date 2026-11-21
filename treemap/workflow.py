@@ -7,6 +7,7 @@ differ only in how they report progress.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from treemap.config import Config, parse_leds
@@ -23,6 +24,11 @@ if TYPE_CHECKING:
 
 class WorkflowError(RuntimeError):
     """A step can't run; the message says why and what to do."""
+
+
+# Waits until the phone's page has set its camera's exposure for the LEDs (calling
+# check_cancel meanwhile); returns {"message": what was done, "settings": the camera's}.
+CameraReady = Callable[[Callable[[], None]], dict]
 
 
 def parse_led_subset(text: str | None, led_count: int) -> list[int] | None:
@@ -51,7 +57,7 @@ def camera_colours(cfg: Config, camera_id: str | None = None) -> tuple[ColourMod
     from treemap.scan.colours import ColourError, ColourModel
 
     camera_id = camera_id or cfg.camera_id
-    path = cfg.colours_path
+    path = cfg.colours_path_for(camera_id)
     if not path.exists():
         return None, (None if camera_id == "sim" else
                       "this camera's colours haven't been measured, so colours may be misread")
@@ -90,6 +96,7 @@ def run_scan(
     sim_port: int | None = None,
     camera: Camera | None = None,
     camera_id: str | None = None,
+    camera_ready: CameraReady | None = None,
     on_update: Callable[[dict], None] = lambda u: None,
     check_cancel: Callable[[], None] = lambda: None,
     on_message: Callable[[str], None] = lambda m: None,
@@ -98,10 +105,9 @@ def run_scan(
     camera, or ``camera`` (named ``camera_id`` for its measured colours). Earlier rounds
     are forgotten; the rounds of this scan build on each other.
 
-    First the camera gets ready (:func:`prepare_camera`: a countdown, then the Android
-    camera's exposure and colours). ``on_update`` gets progress dicts, ``round`` 0 while
-    getting ready. Interrupting (any exception from a callback) keeps the rounds
-    finished so far.
+    First the camera gets ready (:func:`prepare_camera`: a countdown, then the camera's
+    exposure and colours). ``on_update`` gets progress dicts, ``round`` 0 while getting
+    ready. Interrupting (any exception from a callback) keeps the rounds finished so far.
     """
     from treemap.cameras import CameraError, create_camera
     from treemap.cameras.browser import CameraUnavailable
@@ -115,7 +121,7 @@ def run_scan(
     with camera:
         try:
             colours = prepare_camera(cfg, camera, output, on_update, check_cancel, on_message,
-                                     camera_id)
+                                     camera_id, camera_ready)
             return scan(output, camera, scan_settings(cfg, colours), fresh=True, rounds=rounds,
                         on_update=on_update, check_cancel=check_cancel)
         except (ScanError, CameraUnavailable) as e:
@@ -130,20 +136,25 @@ def prepare_camera(
     check_cancel: Callable[[], None] = lambda: None,
     on_message: Callable[[str], None] = lambda m: None,
     camera_id: str | None = None,
+    camera_ready: CameraReady | None = None,
 ) -> ColourModel | None:
     """Get the camera ready to scan; returns the colours to read the code by.
 
     1. **countdown** (``scan.countdown_s``): the LEDs glow dim white, to point the
        camera at them.
-    2. **exposure**: a camera that can (the Android one) gets its exposure and white
-       balance set for the LEDs (:func:`treemap.cameras.check.fix_exposure`).
-    3. **colours**: how it sees each colour of the code at that exposure is measured
-       and saved, as ``treemap camera check`` does. If too few LEDs were seen, the last
-       measurement is used.
+    2. **exposure**: the LEDs show white at the scan's brightness while the camera's
+       exposure and white balance are set for them: by
+       :func:`treemap.cameras.check.fix_exposure` for the Android camera, or by the
+       phone's page, which ``camera_ready`` waits for.
+    3. **colours**: how the camera sees each colour of the code at that exposure is
+       measured and saved, as ``treemap camera check`` does. If too few LEDs were seen,
+       the last measurement is used.
+
+    The sim camera (and the page's camera without ``camera_ready``) skips 2 and 3.
     """
     import time
 
-    from treemap.cameras.check import SYNC, colour_check, fix_exposure, solid
+    from treemap.cameras.check import SYNC, fix_exposure, solid
 
     brightness = cfg.scan.brightness
     glow = solid(output.led_count, SYNC, max(brightness // 4, 8))
@@ -153,7 +164,16 @@ def prepare_camera(
         output.show(glow)
         on_update({"round": 0, "phase": "countdown", "remaining": round(left, 1)})
         time.sleep(min(0.25, left))
-    if not hasattr(camera, "exposure"):  # the sim camera or the phone's page: nothing to set
+
+    if camera_ready is not None:  # the phone's page sets its own camera
+        on_update({"round": 0, "phase": "exposure"})
+        output.show(solid(output.led_count, SYNC, brightness))
+        ready = camera_ready(check_cancel)
+        if ready.get("message"):
+            on_message(ready["message"])
+        return _measure_colours(cfg, camera, output, on_update, check_cancel, on_message,
+                                camera_id, ready.get("settings") or {}, settle_s=1.0)
+    if not hasattr(camera, "exposure"):  # the sim camera: nothing to set
         colours, problem = camera_colours(cfg, camera_id)
         if problem:
             on_message(problem)
@@ -163,11 +183,39 @@ def prepare_camera(
     if (done := fix_exposure(camera, output, brightness)) is not None:
         on_message(done)
     check_cancel()
-    on_update({"round": 0, "phase": "colours"})
-    results, model = colour_check(camera, output, brightness)
+    return _measure_colours(cfg, camera, output, on_update, check_cancel, on_message,
+                            camera_id, camera.exposure()["settings"])
+
+
+def _measure_colours(
+    cfg: Config, camera: Camera, output: LedOutput, on_update: Callable[[dict], None],
+    check_cancel: Callable[[], None], on_message: Callable[[str], None],
+    camera_id: str | None, settings: dict, settle_s: float = 0.6,
+) -> ColourModel | None:
+    """Step 3 of :func:`prepare_camera`. The page's frames arrive in batches up to half
+    a second late, hence its longer ``settle_s``."""
+    from treemap.cameras.check import COLOURS, GOOD_SHARE, advice, colour_check
+
+    sample_s = 1.5
+    brightness = cfg.scan.brightness
+
+    def on_colour(i: int) -> None:
+        check_cancel()
+        on_update({"round": 0, "phase": "colours",
+                   "remaining": round((len(COLOURS) - i) * (settle_s + sample_s), 1)})
+
+    results, model = colour_check(camera, output, brightness, settle_s, sample_s, on_colour)
     check_cancel()
-    if model is not None and min(r.blobs for r in results) >= 10:
-        save_colours(cfg, model, camera, results)
+    seen = model is not None and min(r.blobs for r in results) >= 10
+    on_update({"round": 0, "phase": "colours", "remaining": 0, "colours": {
+        "ok": seen and all(r.share >= GOOD_SHARE for r in results),
+        "read_right": {r.name: None if r.share != r.share else round(r.share, 3)
+                       for r in results},
+        "seen": {r.name: r.blobs for r in results},
+        "tips": advice(None, None, results, model, brightness),
+    }})
+    if seen:
+        save_colours(cfg, model, results, camera_id, settings)
         on_message("colours read right: " + ", ".join(f"{r.name} {r.share:.0%}" for r in results))
         return model
     on_message("too few LEDs seen to measure the colours; point the camera at the LEDs")
@@ -177,13 +225,19 @@ def prepare_camera(
     return colours
 
 
-def save_colours(cfg: Config, model: ColourModel, camera: Camera, results: list) -> None:
-    """Save measured colours for the configured camera, with the settings they need."""
+def save_colours(cfg: Config, model: ColourModel, results: list, camera_id: str | None = None,
+                 settings: dict | None = None) -> Path:
+    """Save measured colours for ``camera_id`` (default: the configured camera), with
+    the camera settings they were measured at. Returns where."""
+    camera_id = camera_id or cfg.camera_id
     size = next((r.sample.shape[1::-1] for r in results if r.sample is not None), None)
-    model.meta.update(camera=cfg.camera_id, video_size=list(size) if size else None,
-                      camera_settings=camera.exposure()["settings"]
-                      if hasattr(camera, "exposure") else {})
-    model.save(cfg.colours_path)
+    model.meta.update(camera=camera_id, video_size=list(size) if size else None,
+                      camera_settings=settings or {},
+                      read_right={r.name: None if r.share != r.share else round(r.share, 3)
+                                  for r in results})
+    path = cfg.colours_path_for(camera_id)
+    model.save(path)
+    return path
 
 
 def rebuild_map(cfg: Config) -> tuple[TreeMap, SfmResult]:

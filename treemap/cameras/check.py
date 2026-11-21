@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import time
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -107,14 +108,17 @@ def measure_fps(camera: Camera, seconds: float = 3.0) -> tuple[float, tuple[int,
 
 
 def colour_check(camera: Camera, output: LedOutput, brightness: int, settle_s: float = 0.6,
-                 sample_s: float = 1.5) -> tuple[list[ColourResult], ColourModel | None]:
+                 sample_s: float = 1.5, on_colour: Callable[[int], None] = lambda i: None,
+                 ) -> tuple[list[ColourResult], ColourModel | None]:
     """Show each colour on every LED and measure how the camera sees it. The colours are
     measured on half the frames and tested on the other half, so the shares are what a
     scan can expect. Returns the results and the measured colours (None if some colour
-    wasn't seen at all)."""
+    wasn't seen at all). ``on_colour(i)`` runs as the i-th colour starts showing (and may
+    raise to stop)."""
     seen: dict[str, list] = {}
     samples: dict[str, np.ndarray | None] = {}
-    for name, sym in COLOURS.items():
+    for i, (name, sym) in enumerate(COLOURS.items()):
+        on_colour(i)
         output.show(solid(output.led_count, sym, brightness))
         read_for(camera, settle_s)  # frames from before the change
         frames = read_for(camera, sample_s)
@@ -144,11 +148,12 @@ def colour_check(camera: Camera, output: LedOutput, brightness: int, settle_s: f
     return results, model
 
 
-def advice(fps: float, size: tuple[int, int] | None, results: list[ColourResult],
+def advice(fps: float | None, size: tuple[int, int] | None, results: list[ColourResult],
            model: ColourModel | None, brightness: int) -> list[str]:
-    """What to change, if anything; empty if the camera is fit to scan."""
+    """What to change, if anything; empty if the camera is fit to scan. ``fps`` None:
+    not measured (the scan page's camera, whose frame rate it shows itself)."""
     tips = []
-    if fps < MIN_FPS:
+    if fps is not None and fps < MIN_FPS:
         tips.append(f"only {fps:.0f} frames/s; the scan needs {MIN_FPS:.0f}+ (24 is better). "
                     "Lower IP Webcam's video resolution or quality (Video preferences).")
     if size is not None and size[0] > 1280:

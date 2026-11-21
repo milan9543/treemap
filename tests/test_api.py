@@ -116,12 +116,16 @@ def test_led_commands_and_an_effect(serve):
     assert call(base + "/play", {"effect": "nope"})[0] == 404
 
 
-def phone(base: str, api: Api, tree: SimTree, stop: threading.Event) -> None:
-    """Plays the page: films the LEDs walking round the tree, uploads every 250 ms."""
+def phone(base: str, api: Api, tree: SimTree, stop: threading.Event,
+          clock: dict | None = None) -> None:
+    """Plays the page: films the LEDs walking round the tree, uploads every 250 ms.
+    ``clock["t"]`` is the latest frame's time."""
     t0 = time.monotonic()
     batch, sent = [], time.monotonic()
     while not stop.is_set():
         t = time.monotonic() - t0
+        if clock is not None:
+            clock["t"] = t
         eye, R = walk_pose(t, tree.height, lap_s=6.0)
         img, _ = render(tree.positions, api.output.last, eye, R)
         batch.append(({"t": t, "fov_v": 55.0}, cv2.imencode(".jpg", img)[1].tobytes()))
@@ -165,3 +169,35 @@ def test_a_scan_through_the_api(serve):
     assert api.jobs.wait(10)
     st = call(base + "/scan/state")[2]
     assert st["status"] == "cancelled" and "led_status" not in st
+
+
+def test_the_page_sets_the_phone_up(serve):
+    """A scan that names its phone waits for the page to set the exposure (probing how
+    many LEDs the frames show), then measures and keeps that phone's colours."""
+    api, base = serve(scan={"countdown_s": 0.3})
+    tree = SimTree.load(api.cfg.sim_tree_path)
+    stop = threading.Event()
+    clock: dict[str, float] = {}
+    threading.Thread(target=phone, args=(base, api, tree, stop, clock), daemon=True).start()
+    try:
+        assert call(base + "/scan/camera-ready", {})[0] == 409  # no scan is waiting
+        assert call(base + "/scan/start", {"camera": "Pixel 9 camera2 0, facing back"})[0] == 202
+        deadline = time.monotonic() + 20
+        while call(base + "/scan/state")[2]["phase"] != "exposure":
+            assert time.monotonic() < deadline
+            time.sleep(0.1)
+        status, _, probe = call(base + "/scan/exposure-probe", {"since": clock["t"], "frames": 4})
+        assert status == 200 and probe["frames"] == 4 and probe["leds"] > 100, probe
+        assert call(base + "/scan/camera-ready", {"message": "exposure 2 ms",
+                                                  "settings": {"exposureTime": 20}})[0] == 200
+        while (st := call(base + "/scan/state")[2])["colours"] is None:
+            assert time.monotonic() < deadline and st["status"] == "running", st
+            time.sleep(0.2)
+    finally:
+        call(base + "/scan/stop", {})
+        stop.set()
+    assert st["colours"]["ok"], st["colours"]
+    saved = json.loads(api.cfg.colours_path_for("Pixel 9 camera2 0, facing back").read_text())
+    assert saved["camera"] == "Pixel 9 camera2 0, facing back"
+    assert saved["camera_settings"] == {"exposureTime": 20}
+    assert call(base + "/scan/exposure-probe", {"since": "now"})[0] == 400

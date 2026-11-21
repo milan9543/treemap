@@ -27,6 +27,7 @@ export class Uploader {
   private window: { at: number; frames: number }[] = [];
   private grabbing = false;
   private stopped: (() => void) | null = null;
+  private marked: ((t: number | null) => void)[] = [];
 
   constructor(private api: Api) {}
 
@@ -58,6 +59,22 @@ export class Uploader {
     this.fps = 0;
   }
 
+  /** The time of the newest frame from the camera, on the clock the uploaded frames
+   * carry: frames after it were taken after this call. Null if not filming. */
+  async mark(): Promise<number | null> {
+    if (!this.running || !this.worker) return null;
+    return new Promise((resolve) => {
+      const done = (t: number | null) => {
+        clearTimeout(timer);
+        this.marked = this.marked.filter((f) => f !== done);
+        resolve(t);
+      };
+      const timer = setTimeout(() => done(null), 1000);
+      this.marked.push(done);
+      this.send({ type: "mark" });
+    });
+  }
+
   dispose(): void {
     void this.stop().then(() => {
       this.worker?.terminate();
@@ -75,6 +92,7 @@ export class Uploader {
       const m = ev.data;
       if (m.type === "batch") void this.post(m.body, m.frames);
       else if (m.type === "stats") this.dropped = m.dropped;
+      else if (m.type === "mark") this.marked[0]?.(m.t); // answers come in order
       else if (m.type === "stopped") this.stopped?.();
     };
     return w;

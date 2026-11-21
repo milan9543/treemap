@@ -16,11 +16,13 @@ const BATCH_MS = 250;
 export type ToWorker =
   | { type: "start"; quality: number; readable?: ReadableStream<VideoFrame> }
   | { type: "bitmap"; bitmap: ImageBitmap; t: number }
+  | { type: "mark" }
   | { type: "stop" };
 
 export type FromWorker =
   | { type: "batch"; body: ArrayBuffer; frames: number }
   | { type: "stats"; encoded: number; dropped: number; encodeMs: number | null }
+  | { type: "mark"; t: number | null } // the latest frame's time, on the frames' clock
   | { type: "stopped" };
 
 let quality = 0.8;
@@ -35,6 +37,7 @@ let batch: Uint8Array[] = [];
 let encoded = 0;
 let dropped = 0;
 let encodeMs: number[] = [];
+let latestT: number | null = null; // the newest frame to arrive, encoded or not
 const header = new TextEncoder();
 
 async function encode(source: VideoFrame | ImageBitmap, t: number): Promise<void> {
@@ -111,7 +114,8 @@ async function pump(readable: ReadableStream<VideoFrame>): Promise<void> {
     }
     if (r.done) break;
     // The capture time (µs) beats the time it reached the worker.
-    void encode(r.value, r.value.timestamp / 1e6);
+    latestT = r.value.timestamp / 1e6;
+    void encode(r.value, latestT);
   }
 }
 
@@ -120,13 +124,17 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   if (m.type === "start") {
     quality = m.quality;
     running = true;
+    latestT = null;
     batch = [];
     encoded = dropped = 0;
     clearInterval(timer);
     timer = setInterval(flush, BATCH_MS);
     if (m.readable) void pump(m.readable);
   } else if (m.type === "bitmap") {
+    latestT = m.t;
     void encode(m.bitmap, m.t);
+  } else if (m.type === "mark") {
+    post({ type: "mark", t: running ? latestT : null });
   } else if (m.type === "stop") {
     running = false;
     clearInterval(timer);

@@ -3,11 +3,14 @@
   //
   // The server runs the scan (countdown, then rounds of flashing, solving and showing the
   // result on the LEDs) and this page films for it: frames go up every 250 ms for as
-  // long as the scan runs, and its state is polled once a second.
+  // long as the scan runs, and its state is polled once a second. When the server
+  // reaches the "exposure" phase, the page sets the camera's exposure for the LEDs
+  // (exposure.ts) and says when it's done; the server then measures the colours.
   import { onDestroy, onMount } from "svelte";
   import LedStatus from "../components/LedStatus.svelte";
   import { ApiError, type Api, type Phase, type ScanState } from "../lib/api";
   import { cameraName, openRearCamera, type Camera } from "../lib/camera";
+  import { autoExposure, cameraId, cameraSettings, Gone, setExposure, type Step } from "../lib/exposure";
   import { app } from "../lib/state.svelte";
   import { Uploader } from "../lib/uploader.svelte";
 
@@ -24,6 +27,9 @@
   let shown = $state(false); // the result is on the LEDs
   let total = $state(0); // seconds the current phase lasts, for its bar
   let phaseKey = "";
+  let exposingFor: number | null = null; // the scan whose exposure this page has set (or is setting)
+  let steps = $state<Step[]>([]); // the exposures tried, and the LEDs each showed
+  let exposure = $state<{ message: string; ok: boolean } | null>(null);
   let alive = true;
   let polling = false;
   let wake: WakeLockSentinel | null = null;
@@ -50,6 +56,10 @@
           : "Keep every LED in view and the phone steady.";
       case "solving":
         return "Keep the camera on the LEDs.";
+      case "exposure":
+        return "Hold the phone still with the LEDs in view while it finds the right exposure.";
+      case "colours":
+        return "Keep holding still: the LEDs show red, green, blue and white in turn.";
       case "status":
         return tree ? "The tree shows this round: green found, yellow guessed, red missing. " +
             "Walk to where it's red: the next round starts in a moment."
@@ -109,9 +119,12 @@
     error = null;
     shown = false;
     try {
-      const { id } = await api.scanStart({ shape: app.shape });
+      const camera = cam ? await cameraId(cam.label) : undefined;
+      const { id } = await api.scanStart({ shape: app.shape, camera });
       st = null;
       phaseKey = "";
+      steps = [];
+      exposure = null;
       follow(id);
       void keepAwake();
     } catch (e) {
@@ -148,6 +161,9 @@
         }
         st = s;
         error = null;
+        if (s.status === "running" && s.phase === "exposure" && exposingFor !== s.id) {
+          void setUp(s.id);
+        }
         if (s.status !== "running") {
           await finish();
           break;
@@ -160,7 +176,38 @@
     polling = false;
   }
 
+  /** The server waits in the "exposure" phase, LEDs white, for this. */
+  async function setUp(id: number) {
+    exposingFor = id;
+    steps = [];
+    exposure = null;
+    let done: { message: string; settings: Record<string, unknown> };
+    try {
+      if (!cam) throw new Error("The camera is off.");
+      const r = await setExposure(cam.track, {
+        probe: (since) => api.exposureProbe(since),
+        mark: () => up.mark(),
+        onStep: (s) => (steps = s),
+        alive: () => alive && mine === id && !stopping,
+      });
+      exposure = { message: r.message, ok: r.ok };
+      done = r;
+    } catch (e) {
+      if (e instanceof Gone || (e as ApiError).status === 409) return; // the scan moved on
+      const msg = (e as Error).message;
+      exposure = { message: `Couldn't set the exposure: ${msg}`, ok: false };
+      done = { message: `the page couldn't set the exposure: ${msg}`,
+               settings: cam ? cameraSettings(cam.track) : {} };
+    }
+    try {
+      await api.cameraReady(done); // the scan goes on, even after a failure
+    } catch (e) {
+      if ((e as ApiError).status !== 409) error = (e as Error).message;
+    }
+  }
+
   async function finish() {
+    if (cam) void autoExposure(cam.track); // a brighter preview between scans
     await up.stop();
     await wake?.release().catch(() => {});
     wake = null;
@@ -301,6 +348,29 @@
         <div style:width="{progress === null ? 0 : Math.min(100, 100 * progress)}%"></div>
       </div>
       <p class="hint">{hint(st?.phase ?? null)}</p>
+      {#if st?.phase === "exposure" && steps.length}
+        <div class="steps num small" aria-live="polite">
+          {#each steps as s (s.ms)}
+            <span class:tried={s.leds !== null}>{s.ms} ms<b>{s.leds ?? "…"}</b></span>
+          {/each}
+        </div>
+      {/if}
+      {#if exposure && !exposure.ok && st?.round === 0}
+        <div class="note warn">{exposure.message}</div>
+      {/if}
+      {#if st?.colours && (st.phase === "colours" || !st.colours.ok)}
+        <div class="colours num small">
+          {#each Object.entries(st.colours.read_right) as [name, share] (name)}
+            <span class:low={share === null || share < 0.85}>
+              <i class="dot {name}"></i>{share === null ? "unseen" : `${Math.round(share * 100)}%`}
+            </span>
+          {/each}
+        </div>
+        {#if !st.colours.ok}
+          <div class="note warn">Some colours are hard to tell apart, so the scan may misread
+            LEDs.{#each st.colours.tips as tip (tip)}<br />{tip}{/each}</div>
+        {/if}
+      {/if}
       {#if st?.phase === "status" && !st.identified}
         <div class="note warn">No LED was read this round. Is the camera on the LEDs, and are
           they flashing? Try standing closer.</div>
@@ -401,6 +471,19 @@
   .wide { width: 100%; margin-top: 14px; }
   .after { margin: 8px 0 0; text-align: center; }
   .result { margin-top: 12px; }
+  .steps, .colours { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+  .steps span, .colours span {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
+    background: var(--surface-2); color: var(--muted);
+  }
+  .steps span.tried { color: inherit; }
+  .steps b { font-weight: 600; }
+  .colours span.low { color: var(--bad); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  .dot.red { background: #ff3b30; }
+  .dot.green { background: #34c759; }
+  .dot.blue { background: #0a84ff; }
+  .dot.white { background: #fff; box-shadow: 0 0 0 1px rgba(127, 127, 127, 0.5); }
   @media (min-width: 700px) {
     .panel { max-width: 560px; width: 100%; margin-left: auto; margin-right: auto; }
   }

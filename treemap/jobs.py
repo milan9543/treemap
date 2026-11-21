@@ -7,7 +7,9 @@ so it first stops the effects engine via ``stop_effects``.
 Job kinds and their parameters:
 
 * ``scan``: ``rounds`` (int, default scan.max_rounds); ``shape`` (tree or flat),
-  ``symbol_ms`` and ``brightness`` override the config for this scan. Starts over
+  ``symbol_ms`` and ``brightness`` override the config for this scan; ``camera`` (the
+  scan page's phone) makes it wait for the page to set the exposure, then measure that
+  phone's colours. Starts over
   (earlier rounds are forgotten) and runs until every LED is ok, the rounds are done, or
   it's stopped.
 * ``reconstruct``: solve again from the saved rounds
@@ -56,12 +58,15 @@ class Jobs:
         sim_port: int | None = None,
         camera: Camera | None = None,
         camera_id: str | None = None,
+        camera_ready: workflow.CameraReady | None = None,
     ) -> None:
         self.cfg = cfg
         self.sim_port = sim_port  # where the viewer's camera frames come from
         # The camera scans use instead of the configured one (the phone's page, for
-        # `treemap serve`), and the name its measured colours are kept under.
-        self.camera, self.camera_id = camera, camera_id
+        # `treemap serve`), and the name its measured colours are kept under. A scan
+        # that names its phone (`camera`) waits on `camera_ready` for the page to set
+        # the exposure, then measures that phone's colours.
+        self.camera, self.camera_id, self.camera_ready = camera, camera_id, camera_ready
         self.output_factory = output_factory
         self.stop_effects = stop_effects
         self.on_change = on_change
@@ -161,6 +166,8 @@ class Jobs:
     def _on_update(self, update: dict) -> None:
         with self._lock:
             self._state["progress"] = update
+            if "colours" in update:  # kept for the rest of the scan
+                self._state["colours"] = update["colours"]
         self._emit(force=update.get("phase") != "flashing")
 
     def _with_output(self, body: Callable[[LedOutput], Any]) -> Any:
@@ -196,13 +203,21 @@ class Jobs:
                     raise workflow.WorkflowError(f"{key} must be a whole number {lo}-{hi}")
                 changes[key] = p[key]
         cfg.scan = dataclasses.replace(cfg.scan, **changes)
+        camera_id, camera_ready = self.camera_id, None
+        if p.get("camera") is not None:
+            if self.camera_ready is None:
+                raise workflow.WorkflowError("this server's scans can't take a camera")
+            if not isinstance(p["camera"], str) or not 0 < len(p["camera"].strip()) <= 200:
+                raise workflow.WorkflowError("camera must be the phone's camera name")
+            camera_id, camera_ready = p["camera"].strip(), self.camera_ready
 
         def run() -> dict:
             workflow.ensure_sim_tree(cfg)
             tree_map = self._with_output(lambda out: workflow.run_scan(
                 cfg, out, rounds=rounds, sim_port=self.sim_port, camera=self.camera,
-                camera_id=self.camera_id,
+                camera_id=camera_id, camera_ready=camera_ready,
                 on_update=self._on_update, check_cancel=self._check_cancel,
+                on_message=lambda m: self._update(message=m),
             ))
             return workflow.map_summary(tree_map) if tree_map is not None else {}
 

@@ -1021,8 +1021,9 @@ def camera_check(
     if model is not None:
         from treemap.workflow import save_colours
 
-        save_colours(cfg, model, camera, results)
-        typer.echo(f"saved how this camera sees the colours in {cfg.colours_path}")
+        path = save_colours(cfg, model, results, settings=camera.exposure()["settings"]
+                            if hasattr(camera, "exposure") else {})
+        typer.echo(f"saved how this camera sees the colours in {path}")
     else:
         typer.secho("the colours couldn't be measured, so nothing was saved",
                     fg=typer.colors.YELLOW)
