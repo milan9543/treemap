@@ -8,6 +8,10 @@ from types import TracebackType
 import numpy as np
 
 
+class OutputError(RuntimeError):
+    """The output can't be opened (e.g. a WLED controller's name doesn't resolve)."""
+
+
 class LedOutput(ABC):
     """Displays colours on ``led_count`` LEDs, indexed globally 0..led_count-1.
 

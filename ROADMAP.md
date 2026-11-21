@@ -101,7 +101,7 @@ treemap/
 - Playlists: `treemap playlist playlist.yaml` rotates effects with crossfades.
 - **Done when:** a playlist runs smoothly in the viewer.
 
-#### Batch 8: WLED output (ready before the hardware)
+#### Batch 8: WLED output (ready before the hardware) — done
 - DDP encoder: 10-byte header, push flag on the last packet, ≤480 px per packet, UDP port 4048.
 - `WledOutput`: splits the 400 global LEDs across one or two controllers and handles reversed strands. JSON API helpers read `/json/info` and set `/json/state`.
 - **Done when:** unit tests cover packet encoding and splitting across controllers.

@@ -206,11 +206,11 @@ def test_run_rejects_bad_requests(args, match):
     assert match in result.output
 
 
-def test_wled_output_not_ready_yet(write_config):
-    write_config("output: wled\n")
+def test_wled_controller_that_cant_be_found_fails_cleanly(write_config):
+    write_config("output: wled\ncontrollers: [{host: no-such-wled.invalid, count: 10}]\n")
     result = runner.invoke(app, ["test", "off"])
     assert result.exit_code == 1
-    assert "Batch 8" in result.output
+    assert "can't find the WLED controller" in result.output
 
 
 def test_config_show_reports_errors(write_config):

@@ -16,8 +16,9 @@ tree grows like a fir (whorls of drooping branches covered in needles, the light
 onto them), and its LEDs light up the branches and the floor round them, in the 3D view
 and, more faintly, in the phone's photos.
 
-> **Status:** the simulator, scanning, mapping checks and the effects engine all work. The WLED output (`output: wled`) and the Android camera
-> (`camera: android`) aren't built yet; see [ROADMAP.md](ROADMAP.md).
+> **Status:** the simulator, scanning, mapping checks, the effects engine and the WLED
+> output (`output: wled`) work. The Android camera (`camera: android`) isn't built yet,
+> so scanning still needs the simulator; see [ROADMAP.md](ROADMAP.md).
 
 ## Install
 
@@ -114,6 +115,7 @@ Keep `treemap sim view` running in one terminal to watch; run these in another.
 | List effects | `treemap effects` |
 | Run an effect | `treemap run rainbow -p speed=0.5 --seconds 30` |
 | Run a 3D effect on the true positions | `treemap run plane -p direction=around --map truth` |
+| Check the WLED controllers' settings | `treemap wled check` |
 | Show the config | `treemap config show` |
 
 `treemap scan` needs the viewer open, because the viewer's virtual phone films the
@@ -145,7 +147,7 @@ change:
 
 | Key | What it does |
 |---|---|
-| `output` | `sim` (the browser viewer) or `wled` (not built yet). |
+| `output` | `sim` (the browser viewer) or `wled` (the controllers, see [Real LEDs](#real-leds-wled)). |
 | `controllers` | WLED controllers, each owning a slice of the LED indices; `reverse: true` for a strip wired from the other end. |
 | `camera.type`, `camera.url` | `sim` (the viewer's virtual phone), or `android` with the IP Webcam URL (not built yet). |
 | `camera.fov_deg` | The phone camera's horizontal field of view; a starting guess the solve refines. |
@@ -168,6 +170,39 @@ change:
 | `data/scans/<profile>/round_XX.npz` | One scan round: which LED was at which pixel in each photo. |
 | `data/scans/<profile>/overrides.json` | LEDs you asked to interpolate. |
 | `data/tree_map.json` | The result: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. |
+
+## Real LEDs: WLED
+
+treemap streams colours to WLED controllers over DDP (UDP port 4048), the realtime
+protocol WLED receives by default. In `config.yaml`:
+
+```yaml
+output: wled
+controllers:
+  - {host: 192.168.1.51, start: 0, count: 400, reverse: false}
+```
+
+- `host` is the controller's IP address or name (`wled-xxxx.local`). If the name doesn't
+  resolve, use the IP address shown in the WLED app.
+- Each controller drives the LEDs `start` to `start + count - 1` of treemap's numbering,
+  as its own LEDs 0, 1, …; `reverse: true` if its strip is wired from the other end.
+  Between them, the controllers cover every LED from 0. That's also how many LEDs
+  treemap drives.
+
+Then:
+
+1. `treemap wled check` asks each controller for its settings. It warns if WLED is set
+   up for a different number of LEDs than `count`, or if WLED's own brightness is below
+   full (it dims treemap's colours as well; treemap has `engine.brightness`).
+2. `treemap test chase` runs a light from LED 0 to the last one: check the order and
+   that each strip starts where you expect. `treemap test led 57` lights one LED.
+3. `treemap run rainbow` (or any effect) runs it on the LEDs. The 3D effects need a
+   scanned map. `treemap sim view` drives the controllers from the viewer's Effects step
+   too; its 3D view still shows the simulated tree, not your LEDs.
+
+WLED shows treemap's colours while they keep arriving and goes back to its own effect a
+few seconds after they stop. If WLED's settings show "Receive UDP realtime" switched
+off (Sync Interfaces), switch it on. `engine.gamma` defaults to 2.2 on WLED.
 
 ## Scanning the real tree (once the hardware is supported)
 
@@ -226,7 +261,7 @@ workflow step.
 | Module | Contents |
 |---|---|
 | `cameras/` | The camera interface and the viewer's virtual phone. |
-| `outputs/` | The LED output interface and the viewer output. |
+| `outputs/` | The LED output interface, the viewer output and the WLED (DDP) output. |
 | `scan/` | The LED code, blob tracking and decoding, structure from motion, scan rounds, cleanup and evaluation. |
 | `mapping/` | The tree map file and the quality views. |
 | `effects/` | The effects. |

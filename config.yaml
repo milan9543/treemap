@@ -10,7 +10,9 @@ output: sim
 
 # WLED controllers. Each one owns a contiguous slice [start, start + count) of the global
 # LED index; between them they cover every LED from 0, without gaps. "reverse" flips the
-# order within that slice (strand wired from the other end).
+# order within that slice (strand wired from the other end). host is the controller's
+# name or IP address; use the IP if the .local name doesn't resolve. `treemap wled check`
+# checks each one's WLED settings against this.
 controllers:
   - host: wled-tree.local
     start: 0

@@ -29,9 +29,11 @@ sim_app = typer.Typer(help="Simulated tree and 3D viewer.", no_args_is_help=True
 test_app = typer.Typer(
     help="Test patterns for checking wiring and index order.", no_args_is_help=True
 )
+wled_app = typer.Typer(help="WLED controllers.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 app.add_typer(sim_app, name="sim")
 app.add_typer(test_app, name="test")
+app.add_typer(wled_app, name="wled")
 
 
 @dataclass
@@ -645,12 +647,12 @@ def _describe_led(tree_map, index: int) -> None:
 @contextlib.contextmanager
 def _output(ctx: typer.Context, off_on_exit: bool = True) -> Iterator:
     """Open the configured output; turn LEDs off and close it on exit or Ctrl-C."""
-    from treemap.outputs import create_output
+    from treemap.outputs import OutputError, create_output
 
     cfg = ctx.obj.config
     try:
         out = create_output(cfg)
-    except NotImplementedError as e:
+    except OutputError as e:
         fail(str(e))
     interrupted = False
     try:
@@ -758,6 +760,41 @@ def test_off(ctx: typer.Context) -> None:
     with _output(ctx):
         pass
     typer.echo("off")
+
+
+# -- WLED -----------------------------------------------------------------------------
+
+
+@wled_app.command("check")
+def wled_check(ctx: typer.Context) -> None:
+    """Ask each controller in the config whether its WLED settings fit."""
+    from treemap.outputs import OutputError
+    from treemap.outputs.wled import check_problems, fetch_state
+
+    cfg = ctx.obj.config
+    unreachable = 0
+    for i, c in enumerate(cfg.controllers):
+        span = f"LEDs {c.start}-{c.start + c.count - 1}{', reversed' if c.reverse else ''}"
+        typer.secho(f"controllers[{i}] {c.host} ({span})", bold=True)
+        try:
+            data = fetch_state(c.host)
+        except OutputError as e:
+            typer.secho(f"  {e}", fg=typer.colors.RED)
+            unreachable += 1
+            continue
+        info, state = data["info"], data.get("state", {})
+        typer.echo(f"  {info.get('name', 'WLED')} {info.get('ver', '')} at "
+                   f"{info.get('ip', c.host)}: {info.get('leds', {}).get('count', '?')} LEDs, "
+                   f"{'on' if state.get('on') else 'off'}, brightness {state.get('bri', '?')}/255")
+        problems = check_problems(c, data, i)
+        for p in problems:
+            typer.secho(f"  warning: {p}", fg=typer.colors.YELLOW)
+        if not problems:
+            typer.secho("  ok", fg=typer.colors.GREEN)
+    if cfg.output != "wled":
+        typer.echo("\nSet `output: wled` in the config to send colours to the controllers.")
+    if unreachable:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
