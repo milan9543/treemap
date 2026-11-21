@@ -278,6 +278,84 @@ def sim_view(
         fail(f"Can't start the viewer on {cfg.sim.host}:{server.port}: {e.strerror or e}")
 
 
+class Shape(str, Enum):
+    tree = "tree"
+    flat = "flat"
+
+
+@sim_app.command("wled")
+def sim_wled(
+    ctx: typer.Context,
+    new: Annotated[Shape | None, typer.Option(
+        "--new", help="Start with a new layout of this shape (default: the last one).")] = None,
+    leds: Annotated[int | None, typer.Option(min=1, help="LEDs in a new layout.")] = None,
+    strips: Annotated[int, typer.Option(min=1, max=8, help="Strips in a new layout.")] = 2,
+    port: Annotated[int, typer.Option(help="HTTP port (WLED's JSON API and the page).")] = 8780,
+    browser: Annotated[bool, typer.Option(help="Open the page in a browser.")] = True,
+) -> None:
+    """A virtual WLED controller: a simulated tree or flat layout on this screen.
+
+    `treemap serve` drives it like real LEDs (DDP on UDP 4048, the LED count from its
+    /json/info). Walk round it on screen (click, then WASD, mouse, Space, Shift) while the
+    phone's scan page films the screen. New layouts can be made on the page too.
+    """
+    from treemap.api import lan_address
+    from treemap.sim.tree import SpecError, spec_from_config
+    from treemap.sim.virtual_wled import VirtualWled, layout_dict, load_layout, new_layout
+
+    cfg = ctx.obj.raw_config
+    path = cfg.resolve(Path("data") / "virtual_wled.json")
+    layout = None
+    if new is None and path.exists():
+        try:
+            layout = load_layout(path)
+        except (ValueError, KeyError, TypeError) as e:
+            typer.echo(f"The saved layout can't be used ({e}); making a new one.")
+    if layout is None:
+        shape = (new or Shape.tree).value
+        try:
+            if leds is not None:
+                spec = {"strips": [{"leds": n} for n in _split(leds, strips)]}
+            elif shape == "tree":
+                spec = spec_from_config(cfg).to_dict()
+            else:
+                spec = {}
+            layout = new_layout(shape, spec)
+        except SpecError as e:
+            fail(str(e), code=2)
+        layout.save(path)
+    device = VirtualWled(path, port=port, address=lan_address())
+    device.use(layout)
+
+    def ready(d: VirtualWled) -> None:
+        url = f"http://127.0.0.1:{d.port}/"
+        d_shape = layout_dict(d.layout)["shape"] if d.layout else "?"
+        typer.secho(f"Virtual WLED: {d.led_count} LEDs ({d_shape}) at {url}  (Ctrl-C to stop)",
+                    fg=typer.colors.GREEN)
+        typer.echo(f"  DDP on UDP {d.ddp_port}; WLED's JSON API at http://{d.address}:{d.port}/json")
+        typer.echo("  For `treemap serve`, in config.local.yaml:")
+        typer.secho(f"    output: wled\n    {d.controller_line}", bold=True)
+        typer.echo("  Restart `treemap serve` after changing the layout's LED count.")
+        if browser:
+            webbrowser.open(url)
+
+    try:
+        asyncio.run(device.serve(on_ready=ready))
+    except KeyboardInterrupt:
+        typer.echo("\nstopped")
+    except OSError as e:
+        fail(f"Can't start the virtual WLED (HTTP port {port}, DDP port 4048): "
+             f"{e.strerror or e}. Is another one, or real WLED software, running here?")
+
+
+def _split(total: int, parts: int) -> list[int]:
+    from treemap.sim.tree import split_counts
+
+    if total < parts:
+        fail(f"{total} LEDs can't fill {parts} strips", code=2)
+    return split_counts(total, parts)
+
+
 @sim_app.command("evaluate")
 def sim_evaluate(ctx: typer.Context) -> None:
     """Compare the reconstructed map with the simulated tree's true positions.

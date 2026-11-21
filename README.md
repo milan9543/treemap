@@ -266,6 +266,36 @@ same Wi-Fi, and allow it to reach devices on your local network when Chrome asks
 
 Exposure is automatic for now; locking it from the page comes in Phase 4 of the plan.
 
+### A virtual WLED: scan your screen
+
+`treemap sim wled` turns this computer into a WLED controller with a simulated tree (or
+flat layout) on its screen, so the whole flow can be tried with only a phone: the scan
+page, the server, DDP, the "LEDs" and the camera.
+
+```sh
+treemap sim wled              # opens the page; --new flat (or tree) starts a new layout
+```
+
+It prints two lines for `config.local.yaml`, `output: wled` and
+`controllers: [{host: "<ip>:8780"}]`; with those, `treemap serve` drives it like real
+LEDs. It reads the LED count from its `/json/info` and sends colours over DDP to UDP 4048.
+Then scan from the phone as usual, filming the screen:
+
+- **Walk round it on screen:** click the view, then `WASD` or the arrows to move, the
+  mouse to look, `Space` up and `Shift` down. `Esc` lets go of the mouse, `R` goes back
+  to the start, `H` hides the panel (it also hides while you walk).
+- **Hold the phone square-on to the screen, with the layout in the middle.** The scan
+  assumes one camera; filming a screen at an angle skews the picture in a way it doesn't
+  model.
+- **New layouts:** the panel makes a new tree, or a flat layout in rows or a spiral, with
+  any LED count and number of strips. After changing the LED count, restart
+  `treemap serve`, which reads the count when it starts.
+
+The layout is kept in `data/virtual_wled.json`. A controller's `host` may carry a port
+like this for WLED's JSON API; DDP always goes to port 4048. macOS may ask whether
+Python may accept incoming connections: allow it, or DDP from another machine won't
+arrive.
+
 ## Real camera: an Android phone
 
 The scan films through the [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam)

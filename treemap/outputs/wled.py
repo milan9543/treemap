@@ -56,8 +56,16 @@ def ddp_packets(rgb: bytes, seq: int) -> list[bytes]:
     return packets
 
 
+def ddp_host(host: str) -> str:
+    """A controller's host without the HTTP port it may carry (``10.0.0.5:8780``, for the
+    virtual WLED of ``treemap sim wled``): DDP always goes to port 4048."""
+    name, sep, port = host.rpartition(":")
+    return name if sep and port.isdigit() and name and ":" not in name else host
+
+
 def resolve(host: str, port: int) -> tuple[str, int]:
     """``host`` (a name, ``.local`` included, or an IP address) as an IPv4 address."""
+    host = ddp_host(host)
     try:
         infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)
     except socket.gaierror as e:

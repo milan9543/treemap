@@ -12,6 +12,14 @@ export default defineConfig({
     outDir: fileURLToPath(new URL("../treemap/sim/viewer_dist", import.meta.url)),
     emptyOutDir: true,
     chunkSizeWarningLimit: 1000,
+    // index.html: the viewer (`treemap sim view`); wled.html: the virtual WLED's screen
+    // (`treemap sim wled`)
+    rollupOptions: {
+      input: {
+        viewer: fileURLToPath(new URL("index.html", import.meta.url)),
+        wled: fileURLToPath(new URL("wled.html", import.meta.url)),
+      },
+    },
   },
   server: {
     proxy: {

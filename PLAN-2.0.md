@@ -194,9 +194,10 @@ status as one letter (o, i, f).
 Tested on this Mac in headless Chrome 157 with its fake camera against `treemap serve
 --sim`: chase and single LED, countdown, rounds, results and Stop all work, and 20–22 fps
 uploads with no bad frames. The fake camera shows no LEDs, so nothing was identified.
-**Not deployed yet**: `treemap-scan.pages.dev` is the intended address, already the
-default origin and the link `treemap serve` prints. Still to check on the phone: 3.1 once
-deployed, and 3.4's flat scan. Changes from the sketch: `/scan/state` sends `led_status`
+Deployed by hand to **https://treemap-scan.pages.dev/** (Cloudflare Pages project
+`treemap-scan`, direct upload: `npm --prefix scanapp run build && wrangler pages deploy
+scanapp/dist --project-name treemap-scan --branch main`); not yet on every push. Still to
+check on the phone: 3.1 from the hosted page, and 3.4's flat scan. Changes from the sketch: `/scan/state` sends `led_status`
 and `counts` after a stopped or finished scan too, but only for a map that scan made.
 
 - **3.1 Project setup.** A new `scanapp/` (Vite + Svelte + TypeScript, like the viewer),
@@ -211,6 +212,28 @@ and `counts` after a stopped or finished scan too, but only for a map that scan 
   **Done when:** a flat layout scans from the page.
 - **3.5 Round progress.** Polls `scan/state`: round, time left, counts, "walk to the red
   parts". Stop and finish buttons.
+
+## Phase 3b: a virtual WLED to scan on screen
+
+**Built** (2026-11-21): `treemap sim wled` ([treemap/sim/virtual_wled.py](treemap/sim/virtual_wled.py),
+page `viewer/wled.html`). This computer acts as a WLED controller with a simulated tree or
+flat layout ([treemap/sim/flat.py](treemap/sim/flat.py): rows or a spiral) on its
+screen, so the whole 2.0 path can be tried with only a phone, and Phase 4's exposure and
+colours can be tuned on it. `treemap serve` drives it unchanged (`output: wled`, a
+controller `host` with the HTTP port). You walk round it with the viewer's walk keys
+while the phone films the screen. Tested on this Mac: `serve` read its LED count and
+streamed effects at 40 fps; the page shows them, walks, and makes new layouts.
+
+- **3b.1 Virtual controller.** DDP on UDP 4048; `/json`, `/json/info`, `/json/state`,
+  `/json/cfg` as WLED answers them; dark after 2.5 s without frames, as WLED.
+- **3b.2 Flat layouts.** Strips joined end to end in rows or a spiral, hand-laid wobble,
+  rows far enough apart for a camera to separate.
+- **3b.3 The screen.** Full screen, lit as the virtual phone sees the tree; walk keys; a
+  panel (hidden while walking) with the config lines and new layouts.
+  **Done when:** a flat and a tree layout scan from the phone pointed at the screen.
+  Not checked yet. Filming a screen adds a second projection: square-on and centred it
+  acts as one camera with another focal length, which the solve estimates; at an angle
+  the picture is skewed, which it doesn't model.
 
 ## Phase 4: exposure and colours from the phone
 
