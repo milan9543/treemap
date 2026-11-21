@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>treemap spike</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #dcdcd6; --card: #fff;
+    --ok: #18794e; --bad: #c4321c; --warn: #a36100; --accent: #2a5bd7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --fg: #ececea; --muted: #9a9a94; --line: #34342f; --card: #1e1e1c;
+            --ok: #4cc38a; --bad: #ff7a63; --warn: #f0b04a; --accent: #7aa2ff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 16px 16px 64px; }
+  h1 { font-size: 20px; margin: 4px 0 2px; }
+  h2 { font-size: 16px; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 16px; font-size: 13px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 14px; margin: 12px 0; }
+  label { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 2px; }
+  input[type=text], select { width: 100%; font: inherit; padding: 8px; border-radius: 6px;
+            border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 10px; }
+  .row > * { flex: 1 1 140px; }
+  button { font: inherit; font-weight: 600; padding: 10px 14px; border-radius: 8px;
+           border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .5; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  pre { margin: 8px 0 0; padding: 8px; background: var(--bg); border: 1px solid var(--line);
+        border-radius: 6px; font: 12px/1.4 ui-monospace, Menlo, monospace; white-space: pre-wrap;
+        word-break: break-word; max-height: 320px; overflow: auto; }
+  video { width: 100%; max-height: 50vh; background: #000; border-radius: 8px; margin-top: 10px;
+          object-fit: contain; }
+  .ctl { display: grid; grid-template-columns: 9.5em 1fr 6.5em; gap: 8px; align-items: center;
+         font-size: 13px; margin: 6px 0; }
+  .ctl output { text-align: right; font-variant-numeric: tabular-nums; }
+  .ctl input[type=range] { width: 100%; }
+  .check { display: flex; align-items: center; gap: 6px; font-size: 13px; margin-top: 8px; color: var(--fg); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px;
+          font-variant-numeric: tabular-nums; }
+  td, th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<main>
+  <h1>treemap phase 1 spike</h1>
+  <p class="sub">Local network from HTTPS (1.1), camera controls (1.2), frame upload (1.3).
+    Throwaway test page.</p>
+
+  <section>
+    <h2>Run everything</h2>
+    <p class="sub" style="margin:0">Pings the server, opens the camera, tries every manual control,
+      uploads frames at both sizes, and sends the report to the server. About a minute.
+      Point the camera at something lit.</p>
+    <div class="row"><button class="primary" id="all">Run everything</button></div>
+    <div id="allStatus" class="sub" style="margin:8px 0 0"></div>
+  </section>
+
+  <section>
+    <h2>1.1 Server on the local network</h2>
+    <label for="server">Server address</label>
+    <input type="text" id="server" inputmode="url" autocomplete="off" spellcheck="false"
+           placeholder="http://192.168.1.20:8765">
+    <label class="check"><input type="checkbox" id="tas"> add <code>targetAddressSpace: "local"</code> to fetches</label>
+    <div class="row"><button id="ping">Ping</button><button id="probe">Probe page vs worker</button></div>
+    <pre id="pingOut">Secure page: <span id="secure"></span></pre>
+  </section>
+
+  <section>
+    <h2>1.2 Camera controls</h2>
+    <div class="row">
+      <div><label for="cam">Camera</label><select id="cam"><option value="">rear (default)</option></select></div>
+      <div><label for="res">Resolution</label>
+        <select id="res"><option value="640x480">640 × 480</option>
+          <option value="1280x720" selected>1280 × 720</option>
+          <option value="1920x1080">1920 × 1080</option></select></div>
+    </div>
+    <div class="row"><button id="open">Open camera</button><button id="tryall">Try manual controls</button></div>
+    <video id="video" playsinline muted autoplay></video>
+    <div id="controls"></div>
+    <pre id="camOut">Camera not open.</pre>
+  </section>
+
+  <section>
+    <h2>1.3 Frame upload</h2>
+    <div class="row">
+      <div><label for="src">Frames from</label>
+        <select id="src"><option value="track">MediaStreamTrackProcessor (in the worker)</option>
+          <option value="bitmap">requestVideoFrameCallback + ImageBitmap</option></select></div>
+      <div><label for="quality">JPEG quality</label>
+        <select id="quality"><option>0.6</option><option>0.7</option><option selected>0.8</option><option>0.9</option></select></div>
+      <div><label for="secs">Seconds per size</label>
+        <select id="secs"><option>5</option><option selected>10</option><option>20</option></select></div>
+      <div><label for="postFrom">POST from</label>
+        <select id="postFrom"><option value="auto">auto (from the probes)</option>
+          <option value="worker">the worker</option><option value="main">the page (main thread)</option></select></div>
+    </div>
+    <div class="row"><button id="up640">Upload 640 × 480</button><button id="up720">Upload 1280 × 720</button></div>
+    <pre id="upOut">Not started.</pre>
+    <table id="upTable" hidden><thead><tr><th>size</th><th>cam fps</th><th>sent fps</th>
+      <th>MB/s</th><th>KB/frame</th><th>encode ms</th><th>janks</th><th>server fps</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section>
+    <h2>Report</h2>
+    <div class="row"><button id="send">Send report to server</button><button id="copy">Copy report</button></div>
+    <pre id="report">{}</pre>
+  </section>
+
+  <section>
+    <h2>Log</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const params = new URLSearchParams(location.search);
+
+const report = { when: new Date().toISOString(), page: location.origin + location.pathname,
+                 userAgent: navigator.userAgent, ping: null, cameras: [], camera: null,
+                 controls: [], uploads: [] };
+
+function log(...a) {
+  const line = new Date().toISOString().slice(11, 23) + " " + a.map((x) => typeof x === "string" ? x : JSON.stringify(x)).join(" ");
+  console.log("[spike] " + line);
+  const el = $("log");
+  el.textContent += line + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+function showReport() { $("report").textContent = JSON.stringify(report, null, 2); }
+window.addEventListener("error", (e) => log("error:", String(e.message)));
+window.addEventListener("unhandledrejection", (e) => log("error:", String(e.reason)));
+
+// ---------- server address ----------
+function normalise(s) {
+  s = s.trim().replace(/\/+$/, "");
+  if (!s) return s;
+  if (!/^https?:\/\//.test(s)) s = "http://" + s;
+  if (!/:\d+$/.test(s.replace(/^https?:\/\//, ""))) s += ":8765";
+  return s;
+}
+function initialServer() {
+  if (params.get("server")) return normalise(params.get("server"));
+  if (location.hash.length > 1) return normalise(location.hash.slice(1));
+  if (location.protocol === "http:") return location.origin; // served by the spike server itself
+  try { return localStorage.getItem("server") || ""; } catch { return ""; }
+}
+$("server").value = initialServer();
+const server = () => {
+  const s = normalise($("server").value);
+  try { localStorage.setItem("server", s); } catch {}
+  return s;
+};
+$("tas").checked = params.get("tas") === "1";
+if (params.get("src")) $("src").value = params.get("src");
+if (params.get("secs")) $("secs").value = params.get("secs");
+if (params.get("postFrom")) $("postFrom").value = params.get("postFrom");
+$("secure").textContent = String(window.isSecureContext) + " (" + location.protocol + ")";
+
+function fetchOpts(extra = {}) {
+  const o = { cache: "no-store", ...extra };
+  if ($("tas").checked) o.targetAddressSpace = "local";
+  return o;
+}
+
+async function lnaPermission() {
+  for (const name of ["local-network-access", "local-network", "private-network-access"]) {
+    try { return name + ": " + (await navigator.permissions.query({ name })).state; } catch {}
+  }
+  return "no permission name known to this browser";
+}
+
+async function device() {
+  const d = { mobile: navigator.userAgentData?.mobile, platform: navigator.userAgentData?.platform };
+  try {
+    Object.assign(d, await navigator.userAgentData.getHighEntropyValues(["model", "platformVersion", "fullVersionList"]));
+  } catch {}
+  return d;
+}
+
+// ---------- 1.1 ping ----------
+async function ping() {
+  const url = server() + "/ping";
+  const before = await lnaPermission();
+  log("ping", url, "permission before:", before);
+  const t0 = performance.now();
+  const r = { url, targetAddressSpace: $("tas").checked, permissionBefore: before };
+  try {
+    const res = await fetch(url, fetchOpts());
+    r.status = res.status;
+    r.body = await res.json();
+    r.ok = res.ok;
+  } catch (e) {
+    r.ok = false;
+    r.error = String(e);
+  }
+  r.ms = Math.round(performance.now() - t0);
+  r.permissionAfter = await lnaPermission();
+  report.ping = r;
+  $("pingOut").innerHTML = `<span class="${r.ok ? "ok" : "bad"}">${r.ok ? "Reached the server" : "Failed"}</span> in ${r.ms} ms\n` +
+    escape(JSON.stringify(r, null, 2));
+  log("ping", r.ok ? "ok" : "failed", r.error || "", r.ms + " ms");
+  showReport();
+  return r.ok;
+}
+const escape = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+
+// ---------- 1.2 camera ----------
+let stream = null, track = null, openedAs = null;
+const video = $("video");
+
+async function listCameras() {
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+  report.cameras = devs.map((d) => ({ label: d.label, id: d.deviceId.slice(0, 8) }));
+  const sel = $("cam"), keep = sel.value;
+  sel.innerHTML = '<option value="">rear (default)</option>' +
+    devs.map((d) => `<option value="${d.deviceId}">${escape(d.label || d.deviceId.slice(0, 8))}</option>`).join("");
+  sel.value = keep;
+}
+
+async function openCamera(res = $("res").value) {
+  const [w, h] = res.split("x").map(Number);
+  const id = $("cam").value;
+  if (stream && openedAs === id + "@" + res) return;
+  if (stream) stream.getTracks().forEach((t) => t.stop());
+  const video_c = { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 30 } };
+  if (id) video_c.deviceId = { exact: id }; else video_c.facingMode = { ideal: "environment" };
+  log("getUserMedia", res, id ? "device " + id.slice(0, 8) : "rear");
+  stream = await navigator.mediaDevices.getUserMedia({ video: video_c, audio: false });
+  track = stream.getVideoTracks()[0];
+  openedAs = id + "@" + res;
+  video.srcObject = stream;
+  await new Promise((r) => (video.readyState >= 1 ? r() : (video.onloadedmetadata = r)));
+  await video.play().catch(() => {});
+  await sleep(800); // Android reports the full capabilities only once the camera is running
+  await listCameras();
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  report.camera = { label: track.label, requested: res, settings: track.getSettings(), capabilities: caps };
+  $("res").value = res;
+  renderControls(caps);
+  showCamera();
+  log("camera", track.label, track.getSettings().width + "x" + track.getSettings().height);
+  showReport();
+}
+
+function showCamera(extra = "") {
+  if (!track) return;
+  const s = track.getSettings();
+  const pick = ["width", "height", "frameRate", "exposureMode", "exposureTime", "exposureCompensation", "iso",
+                "whiteBalanceMode", "colorTemperature", "focusMode", "focusDistance", "zoom", "torch"];
+  const now = Object.fromEntries(pick.filter((k) => k in s).map((k) => [k, s[k]]));
+  $("camOut").textContent = extra + "Label: " + track.label + "\nSettings now: " + JSON.stringify(now, null, 1) +
+    "\n\nCapabilities: " + JSON.stringify(track.getCapabilities?.() || {}, null, 1);
+}
+
+// Settings that only take effect with a mode set to manual.
+const NEEDS = { exposureTime: { exposureMode: "manual" }, iso: { exposureMode: "manual" },
+                colorTemperature: { whiteBalanceMode: "manual" }, focusDistance: { focusMode: "manual" } };
+const CONTROLS = ["exposureMode", "exposureTime", "exposureCompensation", "iso", "whiteBalanceMode",
+                  "colorTemperature", "focusMode", "focusDistance", "zoom", "torch"];
+
+function renderControls(caps) {
+  const box = $("controls");
+  box.innerHTML = "";
+  for (const k of CONTROLS) {
+    const c = caps[k];
+    if (c === undefined) continue;
+    const row = document.createElement("div");
+    row.className = "ctl";
+    const out = document.createElement("output");
+    let input;
+    if (Array.isArray(c) || typeof c === "boolean") {
+      input = document.createElement("select");
+      const vals = Array.isArray(c) ? c : [false, true];
+      input.innerHTML = vals.map((v) => `<option>${v}</option>`).join("");
+      input.value = String(track.getSettings()[k] ?? vals[0]);
+    } else if (typeof c === "object" && "min" in c) {
+      input = document.createElement("input");
+      input.type = "range";
+      input.min = c.min; input.max = c.max; input.step = c.step || "any";
+      input.value = track.getSettings()[k] ?? c.min;
+    } else continue;
+    out.textContent = track.getSettings()[k] ?? "";
+    input.onchange = async () => {
+      let v = input.value;
+      if (input.type === "range") v = Number(v); else if (v === "true" || v === "false") v = v === "true";
+      const c = { ...(NEEDS[k] || {}), [k]: v };
+      try { await track.applyConstraints({ advanced: [c] }); } catch (e) { log("apply", k, String(e)); }
+      await sleep(300);
+      out.textContent = track.getSettings()[k] ?? "?";
+      showCamera();
+    };
+    input.oninput = () => (out.textContent = input.value);
+    const name = document.createElement("span");
+    name.textContent = k;
+    row.append(name, input, out);
+    box.append(row);
+  }
+  if (!box.children.length) box.innerHTML = '<p class="sub">This camera reports no manual controls.</p>';
+}
+
+// Mean brightness of the preview, 0-255, so we can see whether a setting changes the picture.
+const lumaCanvas = new OffscreenCanvas(64, 36);
+const lumaCtx = lumaCanvas.getContext("2d", { willReadFrequently: true });
+function luma() {
+  lumaCtx.drawImage(video, 0, 0, 64, 36);
+  const d = lumaCtx.getImageData(0, 0, 64, 36).data;
+  let sum = 0;
+  for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  return Math.round(sum / (d.length / 4));
+}
+
+function same(a, b) {
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) <= Math.max(1, Math.abs(b) * 0.05);
+  // Chrome on Android reads manual exposure back as "none" (seen on a Galaxy S23).
+  if (b === "manual" && a === "none") return true;
+  return a === b;
+}
+
+const WATCH = ["exposureMode", "exposureTime", "iso", "whiteBalanceMode", "colorTemperature", "focusMode", "focusDistance"];
+
+async function tryApply(label, constraints) {
+  const r = { label, requested: constraints };
+  try {
+    await track.applyConstraints({ advanced: [constraints] });
+  } catch (e) { r.error = String(e); }
+  await sleep(900);
+  const s = track.getSettings();
+  r.got = Object.fromEntries(Object.keys(constraints).map((k) => [k, s[k]]));
+  r.all = Object.fromEntries(WATCH.filter((k) => k in s).map((k) => [k, s[k]])); // what else moved
+  r.ok = !r.error && Object.keys(constraints).every((k) => same(s[k], constraints[k]));
+  r.luma = luma();
+  report.controls.push(r);
+  log("try", label, r.ok ? "ok" : "NO", JSON.stringify(r.got), "luma " + r.luma, r.error || "");
+  return r;
+}
+
+async function tryControls() {
+  if (!track) await openCamera();
+  const caps = track.getCapabilities ? track.getCapabilities() : {};
+  report.controls = [];
+  const has = (k, v) => Array.isArray(caps[k]) ? caps[k].includes(v) : false;
+  const range = (k) => caps[k] && typeof caps[k] === "object" && "min" in caps[k] ? caps[k] : null;
+  // Snap to the step, but never outside the range (the S23 refused a focusDistance just over max).
+  const snap = (c, v) => {
+    if (c.step) v = Math.round(v / c.step) * c.step;
+    return Math.min(c.max, Math.max(c.min, +v.toFixed(6)));
+  };
+  const lerp = (c, f) => snap(c, c.min + (c.max - c.min) * f);
+  const geo = (c, f) => { // exposure ranges span orders of magnitude; step geometrically
+    const lo = Math.max(c.min, c.step || 1);
+    return snap(c, lo * Math.pow(c.max / lo, f));
+  };
+  $("camOut").textContent = "Trying controls…";
+  report.controls.push({ label: "auto (baseline)", luma: luma(), got: track.getSettings() });
+
+  if (has("exposureMode", "manual")) await tryApply("exposure manual", { exposureMode: "manual" });
+  const et = range("exposureTime");
+  if (et) {
+    // exposureTime is in units of 100 µs: 10 = 1 ms.
+    for (const f of [0.1, 0.3, 0.5]) await tryApply(`exposureTime ${Math.round(geo(et, f))}`, { exposureMode: "manual", exposureTime: geo(et, f) });
+  }
+  const iso = range("iso");
+  if (iso) for (const f of [0, 0.5]) await tryApply(`iso ${Math.round(lerp(iso, f))}`, { exposureMode: "manual", iso: lerp(iso, f) });
+  if (et && iso) { // what a scan would lock: a short exposure with enough gain to see the LEDs
+    const t = geo(et, 0.3), g = lerp(iso, 0.25);
+    await tryApply(`exposureTime ${Math.round(t)} + iso ${Math.round(g)}`, { exposureMode: "manual", exposureTime: t, iso: g });
+  }
+  if (has("exposureMode", "continuous")) await tryApply("exposure auto again", { exposureMode: "continuous" });
+  const ec = range("exposureCompensation");
+  if (ec) {
+    await tryApply("exposureCompensation min", { exposureCompensation: ec.min });
+    await tryApply("exposureCompensation 0", { exposureCompensation: 0 });
+  }
+  if (has("whiteBalanceMode", "manual")) await tryApply("white balance manual", { whiteBalanceMode: "manual" });
+  const ct = range("colorTemperature");
+  if (ct) for (const k of [3000, 5500]) {
+    const v = Math.min(ct.max, Math.max(ct.min, k));
+    await tryApply(`colorTemperature ${v}`, { whiteBalanceMode: "manual", colorTemperature: v });
+  }
+  if (has("whiteBalanceMode", "continuous")) await tryApply("white balance auto again", { whiteBalanceMode: "continuous" });
+  if (has("focusMode", "manual")) await tryApply("focus manual", { focusMode: "manual" });
+  const fd = range("focusDistance");
+  if (fd) for (const f of [0, 1]) await tryApply(`focusDistance ${lerp(fd, f)}`, { focusMode: "manual", focusDistance: lerp(fd, f) });
+  if (has("focusMode", "continuous")) await tryApply("focus auto again", { focusMode: "continuous" });
+
+  const summary = {};
+  for (const k of ["exposureMode", "exposureTime", "exposureCompensation", "iso", "whiteBalanceMode",
+                   "colorTemperature", "focusMode", "focusDistance", "zoom", "torch"]) {
+    // Each try is about the last key it sets; the mode before it is only the prerequisite.
+    const tries = report.controls.filter((r) => r.requested && Object.keys(r.requested).at(-1) === k);
+    summary[k] = caps[k] === undefined ? "not offered" :
+      tries.length ? (tries.every((r) => r.ok) ? "works" : tries.some((r) => r.ok) ? "partly" : "ignored") : "offered, not tried";
+    if (caps[k] !== undefined && typeof caps[k] === "object" && !Array.isArray(caps[k])) summary[k] += ` (${caps[k].min}–${caps[k].max}, step ${caps[k].step})`;
+    else if (Array.isArray(caps[k])) summary[k] += ` [${caps[k].join(", ")}]`;
+  }
+  report.controlSummary = summary;
+  showCamera("Summary: " + JSON.stringify(summary, null, 1) + "\n\n");
+  log("controls done");
+  showReport();
+}
+
+// ---------- 1.3 upload ----------
+let worker = null, liveStats = null, onDone = null, probeId = 0;
+const probeWaiters = new Map();
+function getWorker() {
+  if (worker) return worker;
+  worker = new Worker("worker.js");
+  worker.onmessage = async (ev) => {
+    const m = ev.data;
+    if (m.type === "live") liveStats = m.stats;
+    else if (m.type === "done") onDone?.(m.stats);
+    else if (m.type === "probe") { probeWaiters.get(m.id)?.(m.result); probeWaiters.delete(m.id); }
+    else if (m.type === "batch") { // the worker asks the page to POST a batch for it
+      let ok = false, error = null;
+      try {
+        const r = await fetch(server() + "/frames", fetchOpts({ method: "POST", body: m.body,
+          headers: { "Content-Type": "application/octet-stream" } }));
+        ok = r.ok;
+        if (!ok) error = "HTTP " + r.status;
+      } catch (e) { error = String(e); }
+      worker.postMessage({ type: "posted", id: m.id, ok, error });
+    }
+  };
+  return worker;
+}
+
+function workerProbe(method, path, tas) {
+  const id = ++probeId;
+  const p = new Promise((r) => probeWaiters.set(id, r));
+  getWorker().postMessage({ type: "probe", id, method, url: server() + path, tas });
+  return p;
+}
+
+async function pageProbe(method, path) {
+  const t0 = performance.now();
+  const r = { method };
+  try {
+    const opts = { method };
+    if (method === "POST") { opts.body = new Uint8Array(0); opts.headers = { "Content-Type": "application/octet-stream" }; }
+    const res = await fetch(server() + path, fetchOpts(opts));
+    r.status = res.status; r.ok = res.ok;
+  } catch (e) { r.ok = false; r.error = String(e); }
+  r.ms = Math.round(performance.now() - t0);
+  return r;
+}
+
+// Which context can reach the server, and with which request: settles where uploads must run.
+async function probes() {
+  const p = {
+    pageGet: await pageProbe("GET", "/ping"),
+    pagePostOctet: await pageProbe("POST", "/frames"),
+    workerGet: await workerProbe("GET", "/ping", false),
+    workerPostOctet: await workerProbe("POST", "/frames", false),
+    workerGetTas: await workerProbe("GET", "/ping", true),
+    workerPostOctetTas: await workerProbe("POST", "/frames", true),
+  };
+  report.probes = p;
+  const line = (k) => `${k.padEnd(20)} ${p[k].ok ? "ok " : "NO "} ${p[k].status ?? ""} ${p[k].error ?? ""} ${p[k].ms} ms`;
+  $("pingOut").textContent += "\n\nProbes:\n" + Object.keys(p).map(line).join("\n");
+  log("probes", Object.fromEntries(Object.entries(p).map(([k, v]) => [k, v.ok])));
+  showReport();
+  return p;
+}
+
+function postFrom() {
+  const v = $("postFrom").value;
+  if (v !== "auto") return v;
+  const p = report.probes;
+  return p && !p.workerPostOctet.ok && !p.workerPostOctetTas.ok && p.pagePostOctet.ok ? "main" : "worker";
+}
+
+async function runUpload(res) {
+  await openCamera(res);
+  const w = getWorker();
+  const secs = Number($("secs").value);
+  const source = $("src").value === "track" && "MediaStreamTrackProcessor" in window ? "track" : "bitmap";
+  const from = postFrom();
+  // A worker that can't reach the server may still manage with targetAddressSpace.
+  const tas = $("tas").checked || (from === "worker" && report.probes &&
+    !report.probes.workerPostOctet.ok && report.probes.workerPostOctetTas.ok);
+  const cfg = { server: server(), width: 0, height: 0, quality: Number($("quality").value),
+                batchMs: 250, targetAddressSpace: tas, postFrom: from };
+  const s = track.getSettings();
+  const label = `${s.width}x${s.height}`;
+  log("upload", label, "for", secs + " s via", source, "POST from", from);
+
+  // Preview smoothness: frames the <video> presented, and main-thread gaps over 50 ms.
+  let presented = 0, janks = 0, maxGap = 0, running = true, lastRaf = performance.now();
+  const onFrame = () => { presented++; if (running) video.requestVideoFrameCallback(onFrame); };
+  video.requestVideoFrameCallback(onFrame);
+  const raf = (t) => {
+    const gap = t - lastRaf; lastRaf = t;
+    if (gap > 50) janks++;
+    maxGap = Math.max(maxGap, gap);
+    if (running) requestAnimationFrame(raf);
+  };
+  requestAnimationFrame(raf);
+
+  let clone = null;
+  if (source === "track") {
+    clone = track.clone(); // cancelling the processor may end its track; keep the preview's alive
+    const proc = new MediaStreamTrackProcessor({ track: clone });
+    w.postMessage({ type: "start", cfg, readable: proc.readable }, [proc.readable]);
+  } else {
+    w.postMessage({ type: "start", cfg });
+    const grab = async (now, meta) => {
+      if (!running) return;
+      video.requestVideoFrameCallback(grab);
+      try {
+        const bmp = await createImageBitmap(video);
+        w.postMessage({ type: "bitmap", bitmap: bmp, t: (performance.timeOrigin + now) / 1000 }, [bmp]);
+      } catch {}
+    };
+    video.requestVideoFrameCallback(grab);
+  }
+
+  liveStats = null;
+  const serverSnaps = [];
+  const t0 = performance.now();
+  while (performance.now() - t0 < secs * 1000) {
+    await sleep(1000);
+    let st = null;
+    try { st = await (await fetch(cfg.server + "/stats", fetchOpts())).json(); } catch {}
+    if (st && performance.now() - t0 > 3000) serverSnaps.push(st); // skip the warm-up
+    $("upOut").textContent = `${label}, ${Math.round((performance.now() - t0) / 1000)} / ${secs} s via ${source}, POST from ${from}\n` +
+      "page (last second): " + JSON.stringify(liveStats) + "\nserver (last 3 s): " + JSON.stringify(st);
+  }
+  running = false;
+  const done = new Promise((r) => (onDone = r));
+  w.postMessage({ type: "stop" });
+  const page = await done;
+  if (clone) clone.stop();
+  const dur = (performance.now() - t0) / 1000;
+  const avg = (k) => serverSnaps.length ? +(serverSnaps.reduce((a, x) => a + (x[k] || 0), 0) / serverSnaps.length).toFixed(2) : null;
+  const result = {
+    size: label, requested: res, source, postFrom: from, targetAddressSpace: tas, camera: track.label,
+    quality: cfg.quality, frameRateSetting: s.frameRate,
+    page: { ...page, previewFps: +(presented / dur).toFixed(1), janks, maxGapMs: Math.round(maxGap) },
+    server: { fps: avg("fps"), mbPerS: avg("mb_per_s"), decodeMsMedian: avg("decode_ms_median"),
+              badFrames: serverSnaps.at(-1)?.bad_frames ?? null },
+  };
+  report.uploads.push(result);
+  $("upOut").textContent = JSON.stringify(result, null, 2);
+  const tb = $("upTable");
+  tb.hidden = false;
+  tb.tBodies[0].insertAdjacentHTML("beforeend", `<tr><td>${label}</td><td>${page.camFps}</td><td>${page.encFps}</td>
+    <td>${page.uploadMBs}</td><td>${page.jpegKB}</td><td>${page.encodeMsMedian}</td><td>${janks}</td><td>${result.server.fps ?? "–"}</td></tr>`);
+  log("upload done", label, JSON.stringify(result.page), "server", JSON.stringify(result.server));
+  showReport();
+  return result;
+}
+
+// ---------- report ----------
+async function sendReport() {
+  report.device = await device();
+  report.sentAt = new Date().toISOString();
+  showReport();
+  try {
+    const r = await (await fetch(server() + "/report", fetchOpts({
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(report) }))).json();
+    log("report saved on the server as", r.saved);
+    return true;
+  } catch (e) {
+    log("couldn't send the report:", String(e), "— use Copy report");
+    return false;
+  }
+}
+
+async function runAll() {
+  const st = $("allStatus");
+  const step = (t) => { st.textContent = t; log("== " + t); };
+  try {
+    step("1.1 ping");
+    const reached = await ping();
+    if (reached) {
+      step("1.1 probes: page vs worker");
+      await probes();
+    }
+    step("1.2 camera");
+    await openCamera("1280x720");
+    // Phones have several rear lenses with different controls: try each of them.
+    const backs = report.cameras.filter((c) => /back|rear|environment/i.test(c.label));
+    const ids = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "videoinput");
+    report.cameraTests = [];
+    for (const c of backs.length ? backs : [{ label: "default", id: "" }]) {
+      $("cam").value = ids.find((d) => d.deviceId.startsWith(c.id))?.deviceId ?? "";
+      step("1.2 controls on " + c.label);
+      openedAs = null;
+      await openCamera("1280x720");
+      await tryControls();
+      report.cameraTests.push({ label: track.label, settings: report.camera.settings,
+        capabilities: report.camera.capabilities, summary: report.controlSummary, controls: report.controls });
+    }
+    $("cam").value = "";
+    openedAs = null;
+    if (reached) {
+      step("1.3 upload 640 × 480");
+      await runUpload("640x480");
+      step("1.3 upload 1280 × 720");
+      await runUpload("1280x720");
+    }
+    step("sending report");
+    const sent = await sendReport();
+    st.innerHTML = reached && sent ? '<span class="ok">Done. The report is on the server.</span>'
+      : '<span class="bad">Done, but the server wasn\'t reachable: copy the report below.</span>';
+    log("ALL DONE");
+  } catch (e) {
+    st.innerHTML = `<span class="bad">Stopped: ${escape(String(e))}</span>`;
+    log("ALL FAILED", String(e));
+  }
+}
+
+const busy = (fn) => async (ev) => {
+  const btns = [...document.querySelectorAll("button")];
+  btns.forEach((b) => (b.disabled = true));
+  try { await fn(ev); } catch (e) { log("error:", String(e)); }
+  finally { btns.forEach((b) => (b.disabled = false)); }
+};
+$("ping").onclick = busy(ping);
+$("probe").onclick = busy(probes);
+$("open").onclick = busy(() => { openedAs = null; return openCamera(); });
+$("tryall").onclick = busy(tryControls);
+$("up640").onclick = busy(() => runUpload("640x480"));
+$("up720").onclick = busy(() => runUpload("1280x720"));
+$("send").onclick = busy(sendReport);
+$("copy").onclick = async () => {
+  report.device = await device();
+  showReport();
+  try { await navigator.clipboard.writeText(JSON.stringify(report, null, 2)); log("copied"); }
+  catch (e) { log("copy failed:", String(e)); }
+};
+$("all").onclick = busy(runAll);
+showReport();
+log("page loaded; MediaStreamTrackProcessor:", "MediaStreamTrackProcessor" in window, "secure:", window.isSecureContext);
+if (params.get("auto") === "1") $("all").click();
+</script>
+</body>
+</html>

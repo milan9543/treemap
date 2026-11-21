@@ -16,3 +16,6 @@ data/camera_check/
 # viewer: npm packages and the built bundle (npm --prefix viewer run build)
 node_modules/
 treemap/sim/viewer_dist/
+
+# phase 1 spike: reports and sample frames from the phone
+spikes/phase1/out/
