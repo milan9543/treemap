@@ -19,7 +19,8 @@
     {/if}
     {#if app.frameLeds && expected && app.frameLeds !== expected}
       <Alert tone="warn">
-        Frames have {app.frameLeds} LEDs but the tree has {expected}. Match <code>led_count</code> in config.yaml to the strips.
+        Frames have {app.frameLeds} LEDs but the tree has {expected}: a command started before the tree
+        changed is still sending the old number. Stop it (Ctrl-C in its terminal) and start it again.
       </Alert>
     {/if}
   </div>

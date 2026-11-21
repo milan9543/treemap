@@ -74,7 +74,7 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
      and film that part of the tree.
 4. **Effects**: click an effect to run it. Its controls and the master brightness are
    under **Now playing**. The **3D** effects (plane, 3D colour bands, spiral, bursts, ripples,
-   plasma, radar, fireflies, fill up, 3D checkerboard) colour each LED by where it is on
+   plasma, radar, fireflies, fill up, fill outwards, campfire, 3D checkerboard) colour each LED by where it is on
    the tree, always in Christmas colours (red, green, gold and white). Those that don't
    light every LED have a **background** colour, at its own brightness, for the LEDs the
    animation isn't lighting. The switch on that card picks their positions:
@@ -139,11 +139,12 @@ To deal with a yellow or red LED, select it in the Mapping panel or run `treemap
 
 `config.yaml` in the project folder. Every key is optional, and `treemap config show`
 prints the effective values. Use `-c other.yaml` or `TREEMAP_CONFIG` to choose another
-file. The keys you're most likely to change:
+file. The number of LEDs isn't a key: in the simulator it's the simulated tree's, on the
+real tree it's where the last controller's LEDs end. The keys you're most likely to
+change:
 
 | Key | What it does |
 |---|---|
-| `led_count` | Total LEDs (400 = 2 × 200). |
 | `output` | `sim` (the browser viewer) or `wled` (not built yet). |
 | `controllers` | WLED controllers, each owning a slice of the LED indices; `reverse: true` for a strip wired from the other end. |
 | `camera.type`, `camera.url` | `sim` (the viewer's virtual phone), or `android` with the IP Webcam URL (not built yet). |
@@ -191,13 +192,14 @@ good result:
   names them in a warning; stop all but one (Ctrl-C in its terminal).
 - **"sim viewer not reachable"**: start `treemap sim view`. The command still works
   without it; you just can't watch.
-- **"the simulated tree has N LEDs but led_count is M"**: make `led_count` match the
-  strips, then generate a new tree.
+- **"the tree map has N LEDs but the tree has M"**: the map was scanned on a tree with a
+  different number of LEDs (in the simulator, before you generated a new one). Scan again
+  with **Start over** (`--fresh`).
 - **"the viewer's camera isn't reachable"** or **"no camera frames arrived"**: the scan
   films through the viewer, so keep `treemap sim view` running and the viewer page open.
 - **A round finds few LEDs**: the phone has to see the tree. Walk back until the whole
   tree is in the phone inset, and keep moving round it.
-- **Scan refused with "filmed at different sizes" or "LEDs beyond led_count"**: the
+- **Scan refused with "filmed at different sizes" or "LEDs beyond the tree's N"**: the
   earlier rounds don't fit. Scan again with **Start over** (`--fresh`).
 - **The viewer still shows the old version after an update**: rebuild it
   (`npm --prefix viewer run build`) and reload the page.

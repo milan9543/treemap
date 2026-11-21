@@ -76,7 +76,7 @@ def test_3d_effect_without_a_map_says_what_to_do(tmp_path):
 def test_fill_rises_from_the_bottom_in_a_new_colour():
     ys = np.linspace(0, 1, 100)
     m = tree_map(np.stack([0.2 * np.cos(ys * 40), ys, 0.2 * np.sin(ys * 40)], axis=1))
-    fill = create_effect("fill", ctx_for(m), {"seconds": 4, "wave": 0})
+    fill = create_effect("fill", ctx_for(m), {"speed": 0.25, "hold": 0, "wave": 0})
     frame = fill.render(2.0)  # half way through the first fill: red rising over white
     assert (frame[:30] == (255, 0, 0)).all() and (frame[-30:] == (255, 255, 255)).all()
 
@@ -111,3 +111,52 @@ def test_background_colours_the_leds_the_animation_leaves_alone():
         assert at_bg > 0.25, name  # most LEDs are untouched and show the background
         off = create_effect(name, ctx_for(m), {}).render(1.7)
         assert (np.abs(off).max(axis=1) < 4).mean() > 0.25, name  # default: off
+
+
+def test_fill_outwards_grows_from_the_middle_in_a_new_colour():
+    t = generate_tree(TreeSpec.uniform(200), seed=4)
+    m = tree_map(t.normalised_positions())
+    fill = create_effect("fillout", ctx_for(m), {"speed": 0.25, "hold": 0, "wave": 0})
+    frame = fill.render(2.0)  # half way through the first fill: red growing into white
+    g = m.geometry
+    dist = np.linalg.norm(g.xyz - [0, (g.lo[1] + g.hi[1]) / 2, 0], axis=1)
+    near, far = dist < np.percentile(dist, 20), dist > np.percentile(dist, 80)
+    assert (frame[near] == (255, 0, 0)).all() and (frame[far] == (255, 255, 255)).all()
+
+
+def test_fill_holds_still_then_fills_in_the_next_palette_colour():
+    m = tree_map(np.stack([np.zeros(50), np.linspace(0, 1, 50), np.zeros(50)], axis=1))
+    fill = create_effect("fillout", ctx_for(m), {"speed": 0.5, "hold": 3, "wave": 0,
+                                                 "palette": "green & gold"})
+    for t in (2.2, 4.9):  # filled after 2 s, then still for 3 s: all green
+        assert (fill.render(t) == (0, 190, 20)).all()
+    assert (fill.render(6.0) == (255, 140, 0)).any()  # the next fill brings gold
+
+
+def test_burst_explosion_flashes_then_throws_sparks_that_fade():
+    t = generate_tree(TreeSpec.uniform(400), seed=4)
+    m = tree_map(t.normalised_positions())
+    e = create_effect("sphere", ctx_for(m), {"rate": 0.1, "size": 0.4, "fade": 1.5})
+    e.render(0.0)
+    b = e.bursts[0]
+    dist = np.linalg.norm(m.geometry.xyz - b.centre, axis=1)
+    flash = e.render(0.05)
+    assert (flash[dist < 0.03] > 200).all()  # white-hot at the centre
+    frame = e.render(0.6)  # sparks out near their reach, cooled to the burst's colour
+    lit = frame.max(axis=1) > 60
+    assert lit[dist > 0.15].sum() >= 5 and not lit[dist > 0.6].any()
+    colour = b.rgb / max(b.rgb.max(), 1)
+    shade = frame[lit] / frame[lit].max(axis=1, keepdims=True)
+    assert np.allclose(shade, colour, atol=0.05)
+    if len(e.bursts) == 1:  # (unless another burst came along)
+        assert e.render(1.55).max() < 1  # burnt out
+
+
+def test_fire_is_hot_at_the_bottom_and_dark_at_the_top():
+    t = generate_tree(TreeSpec.uniform(300), seed=4)
+    m = tree_map(t.normalised_positions())
+    e = create_effect("fire", ctx_for(m), {"sparks": 0})
+    h = m.geometry.h
+    for t_ in (0.5, 2.0, 7.3):
+        light = e.render(t_).sum(axis=1)
+        assert light[h < 0.15].mean() > 4 * light[h > 0.8].mean() + 1

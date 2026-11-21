@@ -69,7 +69,7 @@ def walk_frames(tree, codes, seconds: float, symbol_s: float = 0.15, fps: float 
     for k in range(int(seconds * fps)):
         t = t0 + k / fps + rng.uniform(-0.004, 0.004)
         eye, R = walk_pose(t, tree.height)
-        colors = frame_at(symbol_index(t, symbol_s), codes, brightness)
+        colors = frame_at(symbol_index(t, symbol_s, codes.shape[1]), codes, brightness)
         img, _ = render(tree.positions, colors, eye, R, rng=rng)
         yield t + 1000.0, img
 

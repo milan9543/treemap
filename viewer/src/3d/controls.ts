@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
-import { app } from "../lib/state.svelte";
+import { app, type Layer } from "../lib/state.svelte";
 import { camera, renderer, resize } from "./scene";
 
 export const WALK_FOV = 55; // degrees, vertical: the same as the phone's, so you see what it sees
@@ -19,7 +19,10 @@ orbit.addEventListener("start", () => { userMoved = true; });
 
 const look = new PointerLockControls(camera, renderer.domElement);
 const keys = new Set<string>();
-let branchesBefore = false; // walking shows the branches; leaving restores them
+// Walking shows the tree as it is: branches only, no unlit-LED dots, cone or wire.
+// Leaving walk mode restores the layers from before.
+const WALK_LAYERS: Record<Layer, boolean> = { off: false, cone: false, branch: true, wire: false };
+let layersBefore: Record<Layer, boolean> | null = null;
 
 const treeSize = () => ({ H: app.tree?.height ?? 1.8, R: app.tree?.radius ?? 0.6 });
 
@@ -49,8 +52,8 @@ export function setWalking(on: boolean): void {
   app.walking = on;
   const { H, R } = treeSize();
   if (on) {
-    branchesBefore = app.layers.branch;
-    app.layers.branch = true;
+    layersBefore = { ...app.layers };
+    Object.assign(app.layers, WALK_LAYERS);
     orbit.enabled = false;
     camera.fov = WALK_FOV;
     // start at eye height a couple of metres out, on the side the orbit view was on
@@ -62,7 +65,8 @@ export function setWalking(on: boolean): void {
     camera.lookAt(0, H * 0.5, 0);
     look.lock();
   } else {
-    app.layers.branch = branchesBefore;
+    if (layersBefore) Object.assign(app.layers, layersBefore);
+    layersBefore = null;
     look.unlock();
     keys.clear();
     camera.fov = ORBIT_FOV;

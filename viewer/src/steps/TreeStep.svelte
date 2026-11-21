@@ -38,7 +38,6 @@
 
   const limits = $derived(app.config?.limits ?? { spacing: [0.01, 0.5], strips: [1, 8] });
   const total = $derived(strips.reduce((a, s) => a + (s.leds && s.leds > 0 ? s.leds : 0), 0));
-  const cfgCount = $derived(app.config?.led_count ?? null);
   const rnd = $derived(app.config?.random);
 
   function spacing(s: Row): { text: string; bad: boolean } {
@@ -115,10 +114,7 @@
   <div class="row">
     <Button size="sm" icon={Plus} disabled={strips.length >= limits.strips[1]}
       onclick={() => strips.push({ ...(strips.at(-1) ?? { leds: 200, length: null }), start: "auto" })}>Strip</Button>
-    <span class="total mono" class:warn={cfgCount !== null && cfgCount !== total}
-      title={cfgCount !== null && cfgCount !== total ? `led_count in config.yaml is ${cfgCount}` : ""}>
-      {total} LEDs{cfgCount !== null && cfgCount !== total ? ` · config has ${cfgCount}` : ""}
-    </span>
+    <span class="total mono">{total} LEDs</span>
   </div>
   <div class="grid">
     <Field label="Height (m)" hint="Blank = random"><input type="number" step="0.05" min="0.3" max="5" bind:value={height}
@@ -162,7 +158,6 @@
   .strips td.bad { color: var(--bad); }
   .row { display: flex; align-items: center; justify-content: space-between; gap: var(--s2); }
   .total { font-size: var(--t-sm); color: var(--muted); }
-  .total.warn { color: var(--warn); }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2) var(--s3); }
   .small { font-size: var(--t-sm); margin: 0; }
 </style>

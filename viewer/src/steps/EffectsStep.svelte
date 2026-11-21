@@ -7,14 +7,29 @@
   import StepHeader from "../components/ui/StepHeader.svelte";
   import { runEffect, setBrightness, setEffectMap, stopEffect } from "../lib/actions";
   import { defaultName, favourites } from "../lib/favourites.svelte";
-  import type { MapChoice } from "../lib/types";
-  import { app } from "../lib/state.svelte";
+  import type { EffectInfo, MapChoice } from "../lib/types";
+  import { app, save, type EffectsTab } from "../lib/state.svelte";
   import EffectParams from "./EffectParams.svelte";
   import FavouritesCard from "./FavouritesCard.svelte";
 
   const effects = $derived(app.effects?.effects ?? []);
-  // The Mapping effects live in the Map step; the single-LED one is how LEDs get selected.
-  const groups = $derived([...new Set(effects.map((e) => e.group))].filter((g) => g !== "Mapping"));
+  // Tabs: favourites, the 3D effects, and the simple ones (Classic, plus Diagnostics). The
+  // Mapping effects live in the Map step; the single-LED one is how LEDs get selected.
+  const TAB_GROUPS: Record<Exclude<EffectsTab, "favourites">, string[]> = {
+    "3d": ["3D"],
+    simple: ["Classic", "Diagnostics"],
+  };
+  const GROUP_TITLES: Record<string, string> = { "3D": "3D effects", Classic: "Simple effects" };
+  const tabs = $derived([
+    { value: "favourites" as const, label: `Favourites${favourites.list.length ? ` (${favourites.list.length})` : ""}` },
+    { value: "3d" as const, label: "3D" },
+    { value: "simple" as const, label: "Simple" },
+  ]);
+  const byGroup = (g: string): EffectInfo[] => effects.filter((e) => e.group === g);
+  function setTab(t: EffectsTab) {
+    app.effectsTab = t;
+    save("effectsTab", t);
+  }
   const running = $derived(effects.find((e) => e.name === app.engine.running) ?? null);
   let brightness = $state<number | null>(null); // while dragging
   const shownBrightness = $derived(brightness ?? Math.round(app.engine.brightness * 100));
@@ -86,17 +101,20 @@
     {#if app.effectError}<Alert tone="bad">{app.effectError}</Alert>{/if}
   </Card>
 
-  <FavouritesCard />
+  <div class="tabs"><Segmented value={app.effectsTab} onchange={setTab} options={tabs} /></div>
 
-  {#each groups as g}
-    <Card title={g}>
+  {#if app.effectsTab === "favourites"}
+    <FavouritesCard />
+  {:else}
+  {#each TAB_GROUPS[app.effectsTab].filter((g) => byGroup(g).length) as g (g)}
+    <Card title={GROUP_TITLES[g] ?? g}>
       {#snippet actions()}
         {#if g === "3D" && mapOptions.length > 1 && app.engine.map}
           <Segmented size="sm" value={app.engine.map} onchange={setEffectMap} options={mapOptions} />
         {/if}
       {/snippet}
       <div class="grid">
-        {#each effects.filter((e) => e.group === g) as e (e.name)}
+        {#each byGroup(g) as e (e.name)}
           <button class="fx" class:on={app.engine.running === e.name} title={e.description} disabled={app.scanning}
             onclick={() => runTile(e.name)}>
             <b>{e.label}</b>
@@ -106,6 +124,7 @@
       </div>
     </Card>
   {/each}
+  {/if}
 {/if}
 
 <style>
@@ -121,6 +140,8 @@
   .changed b { color: var(--text); font-weight: 600; }
   .bright { display: grid; grid-template-columns: 20px 1fr 44px; align-items: center; gap: var(--s2); color: var(--muted); }
   .bright output { text-align: right; font-size: var(--t-xs); color: var(--text); }
+  .tabs :global(.seg) { display: flex; }
+  .tabs :global(.seg button) { flex: 1; }
   .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
   .fx { text-align: left; display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3); cursor: pointer;
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--r1); color: var(--text); }

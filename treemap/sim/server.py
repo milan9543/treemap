@@ -98,7 +98,9 @@ class SimServer:
     host: str = "127.0.0.1"
     port: int = 8765
     poll_s: float = 0.5
-    led_count: int = 400  # what the test patterns and effects will send
+    # What the test patterns and effects send: a number, or a function giving the current
+    # one (it follows the simulated tree when the viewer generates a new one).
+    led_count: int | Callable[[], int] = 400
     defaults: TreeSpec = field(default_factory=TreeSpec)  # generator form defaults
     # Builds the effects engine once the port is known (the sim output loops back to it).
     # None disables effects in the viewer.
@@ -138,7 +140,7 @@ class SimServer:
                 return _response(HTTPStatus.OK, asset.read_bytes(), kind)
         if path == "/api/config":
             body = {
-                "led_count": self.led_count,
+                "led_count": self.current_led_count(),
                 "defaults": self.defaults.to_dict(),
                 "limits": LIMITS,
                 "random": {"height": HEIGHT_RANGE, "radius": RADIUS_RANGE, "spacing": PITCH_RANGE},
@@ -154,7 +156,7 @@ class SimServer:
             body = {
                 "available": self.engine is not None,
                 "output": self.output_label,
-                "effects": describe_effects(self.led_count),
+                "effects": describe_effects(self.current_led_count()),
             }
             return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
         if path == "/api/tree":
@@ -368,6 +370,22 @@ class SimServer:
     def _broadcast_json(self, msg: dict) -> None:
         broadcast(self.viewers, json.dumps(msg))
 
+    def current_led_count(self) -> int:
+        return self.led_count() if callable(self.led_count) else self.led_count
+
+    async def _tree_changed(self) -> None:
+        """A tree with a different number of LEDs needs an engine sending that many."""
+        if self.engine is None or self.make_engine is None:
+            return
+        n = self.current_led_count()
+        if self.engine.ctx.n == n:
+            return
+        log.info("the tree has %d LEDs now; restarting the effects engine", n)
+        await asyncio.to_thread(self.engine.stop)
+        self.engine = self.make_engine(self)
+        self.engine.on_change = self._engine_changed
+        self._broadcast_json(self._engine_state())
+
     async def _watch_files(self) -> None:
         """Tell viewers to reload when the tree or map are (re)written."""
         stamps = {"tree": lambda: _mtime(self.tree_path), "map": lambda: _mtime(self.map_path)}
@@ -379,6 +397,8 @@ class SimServer:
                 if new != seen[what]:
                     seen[what] = new
                     log.info("%s changed, reloading viewers", what)
+                    if what == "tree":
+                        await self._tree_changed()
                     self._broadcast_json({"type": "reload", "what": what})
 
     # -- lifecycle ----------------------------------------------------------------------

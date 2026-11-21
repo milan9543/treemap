@@ -40,17 +40,17 @@ def test_config_show_defaults():
     result = runner.invoke(app, ["config", "show"])
     assert result.exit_code == 0, result.output
     assert "built-in defaults" in result.output
-    body = yaml.safe_load(result.output)
-    assert body["led_count"] == 400
-    assert body["output"] == "sim"
+    assert "# LEDs: 400, from sim.strips (no simulated tree yet)" in result.output
+    assert yaml.safe_load(result.output)["output"] == "sim"
 
 
 def test_config_show_with_file(write_config):
-    path = write_config("led_count: 200\ncontrollers: []\n", name="custom.yaml")
+    path = write_config("output: wled\ncontrollers: [{host: a, count: 200}]\n",
+                        name="custom.yaml")
     result = runner.invoke(app, ["--config", str(path), "config", "show"])
     assert result.exit_code == 0, result.output
     assert str(path) in result.output
-    assert yaml.safe_load(result.output)["led_count"] == 200
+    assert "# LEDs: 200, from the controllers" in result.output
 
 
 def test_sim_new_saves_tree(tmp_path):
@@ -64,7 +64,6 @@ def test_sim_new_saves_tree(tmp_path):
 
 def test_sim_new_uses_config_section(tmp_path, write_config):
     write_config(
-        "led_count: 90\ncontrollers: []\n"
         "sim:\n  seed: 5\n  quirks: false\n  height: 1.6\n"
         "  strips:\n    - {leds: 60, length: 4.2}\n    - {leds: 30}\n"
     )
@@ -93,10 +92,10 @@ def test_sim_new_strip_options_override_config(tmp_path):
     assert "strip 3: LEDs 150-199, 4.0 m (8.0 cm spacing)" in result.output
 
 
-def test_sim_new_warns_when_led_count_differs(tmp_path):
+def test_led_count_follows_the_new_tree(tmp_path):
     result = runner.invoke(app, ["sim", "new", "--seed", "1", "--strip", "300"])
     assert result.exit_code == 0, result.output
-    assert "the tree has 300 LEDs but led_count in the config is 400" in result.output
+    assert "# LEDs: 300, from the simulated tree" in runner.invoke(app, ["config", "show"]).output
 
 
 @pytest.mark.parametrize(
@@ -119,7 +118,7 @@ def viewer(tmp_path, write_config):
     """A running sim server, with config.yaml pointing SimOutput at it."""
     srv = SimServer(tree_path=tmp_path / "t.json", map_path=tmp_path / "m.json", port=0)
     with ServerThread(srv):
-        write_config(f"led_count: 12\ncontrollers: []\nsim:\n  port: {srv.port}\n")
+        write_config(f"sim:\n  port: {srv.port}\n  strips: [{{leds: 12}}]\n")
         with connect(f"ws://127.0.0.1:{srv.port}/ws/viewer") as ws:
             ws.recv(timeout=5)  # status message
             yield ws
@@ -163,10 +162,10 @@ def test_all_white_and_off(viewer):
 
 
 def test_led_index_out_of_range(write_config):
-    write_config("led_count: 12\ncontrollers: []\n")
+    write_config("sim:\n  strips: [{leds: 12}]\n")
     result = runner.invoke(app, ["test", "led", "12"])
     assert result.exit_code == 2
-    assert "below led_count" in result.output
+    assert "below the number of LEDs (12)" in result.output
 
 
 def test_bad_color():

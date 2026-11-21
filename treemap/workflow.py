@@ -122,7 +122,7 @@ def load_map(cfg: Config) -> TreeMap:
         raise WorkflowError(f"{cfg.map_path}: {e}") from None
     if tree_map.led_count != cfg.led_count:
         raise WorkflowError(
-            f"the tree map has {tree_map.led_count} LEDs but led_count is {cfg.led_count}; "
+            f"the tree map has {tree_map.led_count} LEDs but the tree has {cfg.led_count}; "
             "scan again"
         )
     return tree_map

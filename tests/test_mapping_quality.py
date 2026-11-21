@@ -44,7 +44,7 @@ def test_reconstruct_show_and_fix_from_the_cli(tmp_path, write_config):
     from tests.walk_render import walk_round
     from treemap.sim.tree import TreeSpec, generate_tree
 
-    write_config("led_count: 400\ncontrollers: []\nsim: {port: 1}\n")
+    write_config("sim: {port: 1}\n")
     tree = generate_tree(TreeSpec.uniform(400), seed=3)
     walk_round(tree).save(tmp_path / "data/scans/default/round_01.npz")
     runner = CliRunner()
@@ -84,4 +84,4 @@ def test_mapping_effects_follow_the_map_file(tmp_path):
 
 def test_hidden_leds_validated():
     with pytest.raises(ConfigError, match="hidden_leds"):
-        config_from_dict({"led_count": 10, "controllers": [], "sim": {"hidden_leds": "5-20"}})
+        config_from_dict({"sim": {"hidden_leds": "20-5"}})

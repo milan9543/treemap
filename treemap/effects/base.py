@@ -199,7 +199,7 @@ class MapEffect(Effect):
         load = self.ctx.tree_map
         m = load() if load is not None else None
         if m is not None and m.led_count != self.n:
-            raise ParamError(f"the tree map has {m.led_count} LEDs but led_count is {self.n}")
+            raise ParamError(f"the tree map has {m.led_count} LEDs but the tree has {self.n}")
         return m
 
     def render(self, t: float) -> np.ndarray:

@@ -24,3 +24,17 @@ def test_one_lap_maps_most_leds_to_within_a_centimetre(tmp_path):
     assert ok["median"] * ev.height_m < 0.01, ok  # metres
     assert ok["p95"] * ev.height_m < 0.03, ok
     assert np.isfinite(tree_map.positions).all()
+
+
+def test_more_leds_get_longer_codes_that_still_repair():
+    from treemap.scan.code import code_lookup, codewords, repair
+
+    assert codewords(728).shape == (728, 7)  # up to 728: 6 digits + check, as before
+    codes = codewords(800)
+    assert codes.shape == (800, 8)
+    assert len(code_lookup(800)) == 800  # all distinct
+    assert codewords(5000).shape == (5000, 9)
+    for i in (0, 399, 799):
+        damaged = [int(d) for d in codes[i]]
+        damaged[3] = None  # a symbol the camera missed
+        assert code_lookup(800)[tuple(repair(damaged))] == i

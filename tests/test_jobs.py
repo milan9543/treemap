@@ -21,7 +21,7 @@ from treemap.workflow import ensure_sim_tree
 
 @pytest.fixture
 def cfg(tmp_path):
-    c = config_from_dict({"led_count": 400, "controllers": [], "sim": {"seed": 3, "port": 1}})
+    c = config_from_dict({"sim": {"seed": 3, "port": 1}})
     c.base_dir = tmp_path
     ensure_sim_tree(c)
     return c

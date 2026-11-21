@@ -100,6 +100,10 @@ def config_show(ctx: typer.Context) -> None:
     cfg = ctx.obj.config
     source = cfg.source if cfg.source else "built-in defaults (no config.yaml found)"
     typer.secho(f"# source: {source}", fg=typer.colors.BRIGHT_BLACK)
+    origin = "the controllers" if cfg.output == "wled" else (
+        f"the simulated tree, {cfg.sim_tree_path}" if cfg.sim_tree_path.exists()
+        else "sim.strips (no simulated tree yet)")
+    typer.secho(f"# LEDs: {cfg.led_count}, from {origin}", fg=typer.colors.BRIGHT_BLACK)
     typer.echo(yaml.safe_dump(cfg.to_dict(), sort_keys=False).rstrip())
 
 
@@ -114,7 +118,7 @@ def _new_tree(cfg: Config, spec=None):
     return tree
 
 
-def _describe_tree(tree, led_count: int | None = None) -> str:
+def _describe_tree(tree) -> str:
     lines = [
         f"seed {tree.seed}: {tree.led_count} LEDs on {len(tree.strands)} strip(s), "
         f"{tree.layout}, height {tree.height:.2f} m, radius {tree.radius:.2f} m"
@@ -127,14 +131,6 @@ def _describe_tree(tree, led_count: int | None = None) -> str:
             f"{s.turns:.1f} turns {s.handedness}{quirk}"
         )
     lines += [typer.style(f"  warning: {w}", fg=typer.colors.YELLOW) for w in tree.warnings]
-    if led_count is not None and led_count != tree.led_count:
-        lines.append(
-            typer.style(
-                f"  warning: the tree has {tree.led_count} LEDs but led_count in the config "
-                f"is {led_count}; test patterns and effects will drive {led_count}.",
-                fg=typer.colors.YELLOW,
-            )
-        )
     return "\n".join(lines)
 
 
@@ -205,7 +201,7 @@ def sim_new(
         tree = _new_tree(cfg, spec)
     except SpecError as e:
         fail(str(e), code=2)
-    typer.echo(_describe_tree(tree, cfg.led_count))
+    typer.echo(_describe_tree(tree))
     typer.secho(f"saved {cfg.sim_tree_path}", fg=typer.colors.GREEN)
 
 
@@ -222,20 +218,20 @@ def sim_view(
     cfg = ctx.obj.config
     if not cfg.sim_tree_path.exists():
         typer.echo("No simulated tree yet, generating one:")
-        typer.echo(_describe_tree(_new_tree(cfg), cfg.led_count))
+        typer.echo(_describe_tree(_new_tree(cfg)))
     else:
         try:
             SimTree.load(cfg.sim_tree_path)
         except (ValueError, KeyError, TypeError) as e:
             typer.echo(f"Existing tree can't be used ({e}); generating a new one:")
-            typer.echo(_describe_tree(_new_tree(cfg), cfg.led_count))
+            typer.echo(_describe_tree(_new_tree(cfg)))
 
     server = SimServer(
         tree_path=cfg.sim_tree_path,
         map_path=cfg.map_path,
         host=cfg.sim.host,
         port=port or cfg.sim.port,
-        led_count=cfg.led_count,
+        led_count=lambda: cfg.led_count,  # follows the tree as the viewer regenerates it
         defaults=spec_from_config(cfg),
         make_engine=lambda s: _make_engine(cfg, sim_port=s.port, source="viewer: effects"),
         output_label=_output_label(cfg),
@@ -602,7 +598,7 @@ def fix(
     cfg = ctx.obj.config
     n = cfg.led_count
     if index >= n:
-        raise typer.BadParameter(f"must be below led_count ({n})", param_hint="INDEX")
+        raise typer.BadParameter(f"must be below the number of LEDs ({n})", param_hint="INDEX")
     choices = ("interpolate", "measure", "keep")
     if action not in (None, *choices):
         raise typer.BadParameter(", ".join(choices), param_hint="--action")
@@ -727,7 +723,7 @@ def test_led(
 
     n = ctx.obj.config.led_count
     if index >= n:
-        raise typer.BadParameter(f"index must be below led_count ({n})", param_hint="INDEX")
+        raise typer.BadParameter(f"index must be below the number of LEDs ({n})", param_hint="INDEX")
     rgb = _color(color)
     with _output(ctx) as out:
         typer.echo(f"LED {index} lit{'' if seconds else ' (Ctrl-C to turn off)'}")

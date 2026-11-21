@@ -121,7 +121,7 @@ def build_map(rounds: list[Round], led_count: int,
         keep = ~np.isin(led, sorted(interpolate))
         frame, led, uv = frame[keep], led[keep], uv[keep]
     if led.max(initial=-1) >= led_count:
-        raise ScanError(f"the rounds have LEDs beyond led_count={led_count}; "
+        raise ScanError(f"the rounds have LEDs beyond the tree's {led_count}; "
                         "scan again with --fresh")
     res = sfm.solve(frame, led, uv, rounds[0].size, float(np.median([r.focal for r in rounds])),
                     led_count)
@@ -212,7 +212,7 @@ def scan(
         last_slot, last_update = -1, 0.0
         while (now := time.monotonic()) < start + s.round_s:
             check_cancel()
-            slot = symbol_index(now - start, s.symbol_s)
+            slot = symbol_index(now - start, s.symbol_s, codes.shape[1])
             if slot != last_slot:
                 output.show(frame_at(slot, codes, s.brightness))
                 last_slot = slot

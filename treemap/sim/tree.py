@@ -165,7 +165,7 @@ def spec_from_config(cfg: Config) -> TreeSpec:
     """The generator spec described by the ``sim`` section of the config."""
     sim = cfg.sim
     if sim.strips is None:
-        spec = TreeSpec.uniform(cfg.led_count, min(2, cfg.led_count))
+        spec = TreeSpec()
     else:
         spec = TreeSpec(strips=[StripSpec(s.leds, s.length, s.start) for s in sim.strips])
     spec.height, spec.radius, spec.layout = sim.height, sim.radius, sim.layout

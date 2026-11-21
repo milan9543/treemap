@@ -1,13 +1,16 @@
 # treemap configuration. Every key is optional; missing keys use the defaults shown here.
 # Relative paths are resolved against the directory containing this file.
 
-led_count: 400
+# The number of LEDs isn't set here: in the simulator it's the simulated tree's (generate
+# one in the viewer's Tree step or from sim.strips below), on the real tree it's where the
+# last controller's LEDs end.
 
 # Where colours go: "sim" (browser viewer) or "wled" (DDP over UDP to the controllers below).
 output: sim
 
 # WLED controllers. Each one owns a contiguous slice [start, start + count) of the global
-# LED index. "reverse" flips the order within that slice (strand wired from the other end).
+# LED index; between them they cover every LED from 0, without gaps. "reverse" flips the
+# order within that slice (strand wired from the other end).
 controllers:
   - host: wled-tree.local
     start: 0
@@ -47,7 +50,7 @@ engine:
 # The simulated tree (also editable in the viewer's Tree panel). null = random.
 sim:
   seed: null           # null = random tree each time
-  # LED strips in index order. leds must add up to led_count.
+  # LED strips in index order, for `treemap sim new` and the viewer's Tree form defaults.
   #   length: metres of strip; LED spacing = length / leds (null = random 6.5-8 cm)
   #   start:  where index 0 is: bottom | top | auto (auto = sometimes top, if quirks)
   strips:

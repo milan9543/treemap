@@ -20,7 +20,7 @@ import cv2
 import numpy as np
 from scipy.spatial import cKDTree
 
-from treemap.scan.code import CODE_LEN, CYCLE, SYNC, repair
+from treemap.scan.code import SYNC, repair
 
 MIN_LEVEL = 40.0  # brightness (0-255, brightest channel) a blob must exceed
 WHITE_RATIO = 0.55  # weakest/strongest channel above this: white
@@ -201,8 +201,9 @@ class Decoded:
                 np.asarray(uv, dtype=float).reshape(-1, 2))
 
 
-def frame_slots(tracker: Tracker, symbol_s: float) -> tuple[np.ndarray, np.ndarray, int]:
-    """Per frame: cycle number and code slot 0..CODE_LEN-1 it reads (-1 if none)."""
+def frame_slots(tracker: Tracker, symbol_s: float,
+                code_len: int) -> tuple[np.ndarray, np.ndarray, int]:
+    """Per frame: cycle number and code slot 0..code_len-1 it reads (-1 if none)."""
     t = np.asarray(tracker.times)
     white = np.nan_to_num(np.asarray(tracker.white), nan=0.0) >= SYNC_SHARE
     cycle = np.full(len(t), -1)
@@ -223,19 +224,21 @@ def frame_slots(tracker: Tracker, symbol_s: float) -> tuple[np.ndarray, np.ndarr
         end = centres[c + 1] - 0.5 * symbol_s if c + 1 < len(centres) else np.inf
         rel = (t - centre) / symbol_s  # in symbols; slot s's centre is at s + 1
         s = np.round(rel).astype(int) - 1
-        ok = (s >= 0) & (s < CODE_LEN) & (np.abs(rel - (s + 1)) <= SLOT_WINDOW) & (t < end)
+        ok = (s >= 0) & (s < code_len) & (np.abs(rel - (s + 1)) <= SLOT_WINDOW) & (t < end)
         cycle[ok] = c
         slot[ok] = s[ok]
     return cycle, slot, len(centres)
 
 
 def decode(tracker: Tracker, symbol_s: float, lookup: dict[tuple[int, ...], int]) -> Decoded:
-    cycle, slot, n_cycles = frame_slots(tracker, symbol_s)
+    """Which LED each track is, from the codewords in ``lookup`` (codeword -> LED)."""
+    code_len = len(next(iter(lookup)))
+    cycle, slot, n_cycles = frame_slots(tracker, symbol_s, code_len)
     led_of: dict[int, int] = {}
     votes_of: dict[int, int] = {}
     spans: dict[int, tuple[int, int]] = {}
     for tr in tracker.tracks:
-        if len(tr.frames) < CODE_LEN:
+        if len(tr.frames) < code_len:
             continue
         f = np.asarray(tr.frames)
         s = np.asarray(tr.sym)
@@ -244,7 +247,7 @@ def decode(tracker: Tracker, symbol_s: float, lookup: dict[tuple[int, ...], int]
         if not use.any():
             continue
         cs = np.unique(c[use])
-        counts = np.zeros((len(cs), CODE_LEN, 3), dtype=int)
+        counts = np.zeros((len(cs), code_len, 3), dtype=int)
         np.add.at(counts, (np.searchsorted(cs, c[use]), k[use], s[use]), 1)
         votes: Counter[int] = Counter()
         clean: Counter[int] = Counter()

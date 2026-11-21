@@ -2,10 +2,14 @@
 
 Every key is optional. Missing keys fall back to the dataclass defaults, unknown keys are
 rejected (so a typo doesn't silently do nothing), and values are validated on load.
+
+The number of LEDs isn't a key: it's :attr:`Config.led_count`, taken from the simulated
+tree (``output: sim``) or from the controllers (``output: wled``).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import MISSING, asdict, dataclass, field, fields, is_dataclass
@@ -19,6 +23,12 @@ CONFIG_ENV_VAR = "TREEMAP_CONFIG"
 
 OUTPUT_TYPES = ("sim", "wled")
 CAMERA_TYPES = ("sim", "android")
+MAX_LEDS = 5000  # the most LEDs anything here handles (also the sim generator's limit)
+REMOVED_KEYS = {
+    "led_count": "led_count is no longer set in the config: the simulator takes it from "
+                 "the simulated tree (the viewer's Tree step or sim.strips), WLED from "
+                 "the controllers. Delete the line.",
+}
 
 
 class ConfigError(ValueError):
@@ -73,7 +83,7 @@ class StripConfig:
 @dataclass
 class SimConfig:
     seed: int | None = None
-    strips: list[StripConfig] | None = None  # None = led_count split over 2 strips
+    strips: list[StripConfig] | None = None  # None = two strips of 200
     height: float | None = None
     radius: float | None = None
     layout: str = "auto"
@@ -86,7 +96,6 @@ class SimConfig:
 
 @dataclass
 class Config:
-    led_count: int = 400
     output: str = "sim"
     controllers: list[Controller] = field(
         default_factory=lambda: [Controller(host="wled-tree.local", start=0, count=400)]
@@ -100,6 +109,37 @@ class Config:
     base_dir: Path = field(default_factory=Path.cwd, repr=False, compare=False)
     # Not a config key: the file this was loaded from, if any.
     source: Path | None = field(default=None, repr=False, compare=False)
+    # Not a config key: the simulated tree's LED count, keyed by its file's mtime and size.
+    _tree_count: tuple[Any, int] | None = field(default=None, init=False, repr=False,
+                                                compare=False)
+
+    @property
+    def led_count(self) -> int:
+        """How many LEDs there are: in the simulator the simulated tree's (re-read when
+        the tree file changes, so a tree generated in the viewer counts at once), else
+        where the last controller's LEDs end."""
+        if self.output == "wled":
+            return max((c.start + c.count for c in self.controllers), default=0)
+        path = self.sim_tree_path
+        try:
+            st = path.stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = None
+        if stamp is not None:
+            if self._tree_count is not None and self._tree_count[0] == stamp:
+                return self._tree_count[1]
+            try:
+                n = int(json.loads(path.read_text())["led_count"])
+            except (OSError, ValueError, KeyError, TypeError):
+                n = 0
+            if n > 0:
+                self._tree_count = (stamp, n)
+                return n
+        # no tree yet: the one `treemap sim new` (or the viewer) would generate
+        from treemap.sim.tree import spec_from_config  # lazy: pulls in numpy
+
+        return spec_from_config(self).led_count
 
     def resolve(self, path: str | Path) -> Path:
         """Resolve a path from the config relative to the config file's directory."""
@@ -129,17 +169,20 @@ class Config:
 
     @property
     def sim_hidden_leds(self) -> list[int]:
-        return parse_leds(str(self.sim.hidden_leds), self.led_count) if self.sim.hidden_leds else []
+        """sim.hidden_leds that exist on the current tree."""
+        if not self.sim.hidden_leds:
+            return []
+        n = self.led_count
+        return [i for i in parse_leds(str(self.sim.hidden_leds), MAX_LEDS) if i < n]
 
     def to_dict(self) -> dict[str, Any]:
         """The config as plain data, without the non-key fields."""
         d = asdict(self)
-        d.pop("base_dir")
-        d.pop("source")
+        for key in ("base_dir", "source", "_tree_count"):
+            d.pop(key)
         return d
 
     def validate(self) -> None:
-        _check_int("led_count", self.led_count, minimum=1)
         _check_choice("output", self.output, OUTPUT_TYPES)
 
         for i, c in enumerate(self.controllers):
@@ -149,17 +192,24 @@ class Config:
             _check_int(f"{where}.start", c.start, minimum=0)
             _check_int(f"{where}.count", c.count, minimum=1)
             _check_bool(f"{where}.reverse", c.reverse)
-            if c.start + c.count > self.led_count:
-                raise ConfigError(
-                    f"{where} covers LEDs {c.start}..{c.start + c.count - 1}, "
-                    f"beyond led_count={self.led_count}"
-                )
         ranges = sorted((c.start, c.start + c.count, i) for i, c in enumerate(self.controllers))
         for (_, end_a, ia), (start_b, _, ib) in zip(ranges, ranges[1:]):
             if start_b < end_a:
                 raise ConfigError(f"controllers[{ia}] and controllers[{ib}] overlap")
-        if self.output == "wled" and not self.controllers:
-            raise ConfigError("output: wled needs at least one entry in controllers")
+        if self.output == "wled":
+            if not self.controllers:
+                raise ConfigError("output: wled needs at least one entry in controllers")
+            # the controllers define the LEDs, so between them they must cover 0..N-1
+            end = 0
+            for start, stop, i in ranges:
+                if start > end:
+                    raise ConfigError(
+                        f"no controller drives LEDs {end}-{start - 1}; "
+                        f"controllers[{i}] starts at {start}"
+                    )
+                end = stop
+            if end > MAX_LEDS:
+                raise ConfigError(f"the controllers drive {end} LEDs; at most {MAX_LEDS}")
 
         _check_choice("camera.type", self.camera.type, CAMERA_TYPES)
         if self.camera.url is not None and not isinstance(self.camera.url, str):
@@ -197,15 +247,9 @@ class Config:
         _check_bool("sim.quirks", sim.quirks)
         if sim.hidden_leds is not None:
             try:
-                parse_leds(str(sim.hidden_leds), self.led_count)
+                parse_leds(str(sim.hidden_leds), MAX_LEDS)
             except ValueError as e:
                 raise ConfigError(f"sim.hidden_leds: {e}") from None
-        if sim.strips is not None:
-            total = sum(st.leds for st in sim.strips)
-            if total != self.led_count:
-                raise ConfigError(
-                    f"sim.strips add up to {total} LEDs but led_count is {self.led_count}"
-                )
         from treemap.sim.tree import SpecError, spec_from_config  # lazy: pulls in numpy
 
         try:
@@ -271,7 +315,7 @@ def load_config(path: str | Path | None = None) -> Config:
 def config_from_dict(data: Any, where: str = "config") -> Config:
     """Build and validate a :class:`Config` from parsed YAML data."""
     try:
-        cfg = _build(Config, data, "", skip={"base_dir", "source"})
+        cfg = _build(Config, data, "", skip={"base_dir", "source", "_tree_count"})
         cfg.validate()
     except ConfigError as e:
         raise ConfigError(f"{where}: {e}") from None
@@ -295,6 +339,10 @@ def _build(cls: type, data: Any, where: str, skip: frozenset[str] | set[str] = f
         raise ConfigError(f"{label}: expected a mapping, got {type(data).__name__}")
     assert is_dataclass(cls)
     known = {f.name: f for f in fields(cls) if f.name not in skip}
+    if cls is Config:
+        for key, why in REMOVED_KEYS.items():
+            if key in data:
+                raise ConfigError(why)
     unknown = sorted(set(map(str, data)) - set(known))
     if unknown:
         raise ConfigError(

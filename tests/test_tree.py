@@ -283,8 +283,6 @@ def test_spec_from_dict_rejects(d, match):
 def test_spec_from_config():
     cfg = config_from_dict(
         {
-            "led_count": 300,
-            "controllers": [],
             "sim": {
                 "strips": [{"leds": 100, "length": 7}, {"leds": 200, "start": "top"}],
                 "height": 1.8,
@@ -296,8 +294,8 @@ def test_spec_from_config():
     s = spec_from_config(cfg)
     assert s.strips == [StripSpec(100, 7, "auto"), StripSpec(200, None, "top")]
     assert (s.height, s.radius, s.layout, s.seed) == (1.8, None, "interleaved", 3)
-    default = spec_from_config(config_from_dict({"led_count": 301, "controllers": []}))
-    assert [st.leds for st in default.strips] == [151, 150]
+    default = spec_from_config(config_from_dict({}))
+    assert [st.leds for st in default.strips] == [200, 200]
 
 
 # -- misc ---------------------------------------------------------------------------------

@@ -7,6 +7,7 @@ import type {
 export type Step = "tree" | "scan" | "map" | "effects";
 export type ViewMode = "truth" | "scan" | "compare";
 export type Layer = "off" | "cone" | "branch" | "wire";
+export type EffectsTab = "favourites" | "3d" | "simple";
 
 function saved<T>(key: string, fallback: T): T {
   try {
@@ -47,6 +48,7 @@ class App {
   sidebar = $state(saved("sidebar", true));
   settings = $state(false);
   viewMode = $state<ViewMode>("truth");
+  effectsTab = $state<EffectsTab>(saved("effectsTab", "3d"));
   layers = $state<Record<Layer, boolean>>(saved("layers", { off: true, cone: false, branch: true, wire: false }));
   selectedLed = $state<number | null>(null);
   walking = $state(false);

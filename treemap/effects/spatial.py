@@ -10,6 +10,8 @@ effects that used to run through the rainbow cycle through Christmas colours ins
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from treemap.effects.base import MapEffect, Param
@@ -35,6 +37,7 @@ PALETTES = {
     "christmas": ["red", "gold", "green", "white"],
     "candy cane": ["red", "white"],
     "red & green": ["red", "green"],
+    "green & gold": ["green", "gold"],
     "gold": ["gold", "warm white"],
 }
 
@@ -65,12 +68,24 @@ def palette(name: str, s: np.ndarray) -> np.ndarray:
     return np.stack([np.interp(s, x, stops[:, c]) for c in range(3)], axis=-1).astype(np.float32)
 
 
+def palette_color(name: str, k: int) -> np.ndarray:
+    """The ``k``-th colour of a palette, going round it."""
+    names = PALETTES[name]
+    return xmas(names[k % len(names)])
+
+
 def gradient(name: str, s: np.ndarray) -> np.ndarray:
-    """Colours 0-255 along a gradient for values ``s`` 0-1 (clipped): ``s.shape + (3,)``."""
-    stops = np.asarray(GRADIENTS[name], dtype=np.float32)
-    x = np.linspace(0, 1, len(stops))
+    """Colours 0-255 along a named gradient for values ``s`` 0-1 (clipped):
+    ``s.shape + (3,)``."""
+    return gradient_stops(GRADIENTS[name], s)
+
+
+def gradient_stops(stops: list[tuple[int, int, int]], s: np.ndarray) -> np.ndarray:
+    """Colours 0-255 along the given gradient stops for values ``s`` 0-1 (clipped)."""
+    stops_a = np.asarray(stops, dtype=np.float32)
+    x = np.linspace(0, 1, len(stops_a))
     s = np.clip(s, 0, 1)
-    return np.stack([np.interp(s, x, stops[:, c]) for c in range(3)], axis=-1).astype(np.float32)
+    return np.stack([np.interp(s, x, stops_a[:, c]) for c in range(3)], axis=-1).astype(np.float32)
 
 
 def _color_param(name: str, default: str, **kw) -> Param:
@@ -94,8 +109,31 @@ def _sweep(phase: float, bounce: bool) -> float:
     return phase % 1
 
 
+def _fill_params(wave: float, wave_help: str) -> tuple[Param, ...]:
+    return (
+        Param("palette", "choice", "christmas", choices=tuple(PALETTES),
+              help="the colours the fills go through, in turn"),
+        Param("speed", "float", 0.25, min=0.03, max=2, step=0.01, label="Animation speed",
+              help="fills per second: 0.25 takes 4 s to fill the tree"),
+        Param("hold", "float", 1.0, min=0, max=30, step=0.5, label="Seconds still",
+              help="how long the tree stays one colour before the next fill"),
+        Param("wave", "float", wave, min=0, max=0.25, step=0.01, help=wave_help),
+    )
+
+
 class _Effect3D(MapEffect):
     group = "3D"
+
+    def fill_phase(self, t: float) -> tuple[int, float]:
+        """For the fill effects: which fill is running (k) and how far it's got (0-1;
+        it stays at 1 while the tree holds still)."""
+        fill_s = 1 / self.p["speed"]
+        k, into = divmod(t, fill_s + self.p["hold"])
+        return int(k), min(into / fill_s, 1.0)
+
+    def fill_colors(self, k: int) -> tuple[np.ndarray, np.ndarray]:
+        """The colour fill ``k`` brings, and the one it covers."""
+        return palette_color(self.p["palette"], k), palette_color(self.p["palette"], k - 1)
 
     def background(self) -> np.ndarray:
         name = self.p["background"]
@@ -208,27 +246,53 @@ class Spiral(_Effect3D):
         return self.over_background(level, color)
 
 
+@dataclass
+class _Burst:
+    centre: np.ndarray  # (3,)
+    t0: float
+    rgb: np.ndarray  # (3,)
+    dirs: np.ndarray  # (sparks, 3) unit vectors
+    reach: np.ndarray  # (sparks,) how far each spark flies, as a share of `size`
+    crackle: np.ndarray  # (sparks,) twinkle frequency, Hz
+
+
+SPARK_GLOW = 0.05  # spark glow radius (sigma), fraction of the tree height
+CLOUD = 0.35  # brightness of the colour cloud the sparks leave behind them
+SPARK_DRAG_S = 0.16  # sparks shoot out and slow down with this time constant
+FLASH_S = 0.25  # how long the white flash at the centre lasts
+
+
 @register
 class Sphere(_Effect3D):
     name = "sphere"
     label = "Bursts"
-    description = "Glowing spheres bursting out from random points on the tree."
+    description = ("Firework explosions: a white flash and a spray of sparks flying out, "
+                   "cooling to their colour, falling and crackling as they fade.")
     params = (
+        Param("style", "choice", "explosion", choices=("explosion", "ring"),
+              help="explosion: sparks flying out; ring: a shell of light growing and fading"),
         Param("palette", "choice", "christmas", choices=("christmas", "one colour")),
         _color_param("color", "gold", help="used by 'one colour'"),
-        Param("rate", "float", 1.2, min=0.1, max=10, step=0.1, help="bursts per second"),
-        Param("speed", "float", 0.5, min=0.05, max=3, step=0.05,
-              help="growth, tree heights per second"),
-        Param("size", "float", 0.5, min=0.1, max=1.5, step=0.05,
-              help="largest radius, fraction of the tree height"),
+        Param("rate", "float", 0.7, min=0.1, max=10, step=0.1, help="bursts per second"),
+        Param("size", "float", 0.3, min=0.05, max=1.5, step=0.05,
+              help="how far the sparks fly (ring: largest radius), fraction of the tree height"),
+        Param("sparks", "int", 60, min=8, max=150, step=1, help="explosion: sparks per burst"),
+        Param("fade", "float", 1.6, min=0.3, max=6, step=0.1, label="Fade (s)",
+              help="explosion: how long the sparks glow"),
+        Param("gravity", "float", 0.35, min=0, max=1, step=0.05,
+              help="explosion: how much the sparks fall as they fade"),
+        Param("crackle", "bool", True,
+              help="explosion: sparks twinkle as they burn out; off: they fade smoothly"),
+        Param("speed", "float", 0.6, min=0.05, max=3, step=0.05,
+              help="ring: growth, tree heights per second"),
         Param("width", "float", 0.07, min=0.02, max=0.3, step=0.01,
-              help="shell thickness, fraction of the tree height"),
+              help="ring: shell thickness, fraction of the tree height"),
         *_background_params(),
     )
 
     def setup(self) -> None:
         super().setup()
-        self.bursts: list[tuple[np.ndarray, float, np.ndarray]] = []  # centre, start, rgb
+        self.bursts: list[_Burst] = []
         self.next_burst = 0.0
 
     def _color(self) -> np.ndarray:
@@ -236,27 +300,71 @@ class Sphere(_Effect3D):
             return cycle(self.rng.integers(len(CYCLE)))
         return xmas(self.p["color"])
 
+    def _lifetime(self) -> float:
+        p = self.p
+        if p["style"] == "ring":
+            return (p["size"] + p["width"]) / p["speed"]
+        return p["fade"]
+
+    def _spawn(self, centre: np.ndarray, t0: float) -> _Burst:
+        k = self.p["sparks"]
+        dirs = self.rng.normal(size=(k, 3))
+        dirs /= np.linalg.norm(dirs, axis=1, keepdims=True)
+        return _Burst(centre, t0, self._color(), dirs, self.rng.uniform(0.55, 1.0, k),
+                      self.rng.uniform(6.0, 14.0, k))
+
+    def _ring(self, xyz: np.ndarray, b: _Burst, age: float) -> tuple[np.ndarray, np.ndarray]:
+        p = self.p
+        radius = age * p["speed"]
+        dist = np.linalg.norm(xyz - b.centre, axis=1)
+        level = np.clip(1 - np.abs(dist - radius) / p["width"], 0, 1)
+        return level * max(1 - radius / p["size"], 0.0), b.rgb
+
+    def _explosion(self, xyz: np.ndarray, b: _Burst, age: float) -> tuple[np.ndarray, np.ndarray]:
+        p = self.p
+        life = age / p["fade"]
+        # sparks: where each one is now and a moment ago (its trail)
+        ages = np.maximum(age - np.array([0.0, 0.03, 0.06, 0.09]), 0.0)
+        out = 1 - np.exp(-ages / SPARK_DRAG_S)  # shoot out fast, then slow right down
+        pts = b.centre + out[:, None, None] * (b.dirs * (b.reach * p["size"])[:, None])[None]
+        pts[..., 1] -= (p["gravity"] * 0.25 * ages**2)[:, None]  # falling as they slow
+        glow = (1 - life) ** 1.5 * np.array([1.0, 0.6, 0.35, 0.18])[:, None]  # trail dims
+        if p["crackle"] and life > 0.45:  # crackle: twinkling unevenly as they burn out
+            glow = glow * (0.55 + 0.45 * np.sin(TAU * b.crackle * age))[None]
+        d2 = ((xyz[:, None, None, :] - pts[None]) ** 2).sum(axis=3)  # (N, trail, sparks)
+        level = (np.exp(-d2 / (2 * SPARK_GLOW**2)) * glow[None]).max(axis=(1, 2))
+        # a cloud of the burst's colour, filling the space the sparks have swept through
+        dist = np.linalg.norm(xyz - b.centre, axis=1)
+        front = out[0] * p["size"] * 0.8
+        cloud = np.clip((front - dist) / 0.06 + 0.5, 0, 1) * CLOUD * (1 - life) ** 2
+        level = np.maximum(level, cloud)
+        # the flash: a white ball at the centre for the first moment
+        flash = min(1.5 * max(1 - age / FLASH_S, 0.0), 1.0)
+        if flash:
+            sigma = 0.04 + 0.5 * min(age, 0.08)
+            d2c = ((xyz - b.centre) ** 2).sum(axis=1)
+            level = np.maximum(level, flash * np.exp(-d2c / (2 * sigma**2)))
+        hot = max(1 - age / 0.35, 0.0)  # sparks start white-hot and cool to their colour
+        return level, hot * np.array([255.0, 255, 255], np.float32) + (1 - hot) * b.rgb
+
     def render_map(self, t: float, m: TreeMap) -> np.ndarray:
         g = m.geometry
-        lifetime = (self.p["size"] + self.p["width"]) / self.p["speed"]
+        lifetime = self._lifetime()
         self.next_burst = max(self.next_burst, t - lifetime)  # after a pause, don't flood
         valid = np.flatnonzero(g.valid)
         while self.next_burst <= t and len(valid):
-            centre = g.xyz[self.rng.choice(valid)]
-            self.bursts.append((centre, self.next_burst, self._color()))
+            self.bursts.append(self._spawn(g.xyz[self.rng.choice(valid)], self.next_burst))
             self.next_burst += self.rng.exponential(1 / self.p["rate"])
-        self.bursts = [b for b in self.bursts if t - b[1] < lifetime]
+        self.bursts = [b for b in self.bursts if t - b.t0 < lifetime]
 
-        frame = self.blank()
-        lit = np.zeros(self.n, np.float32)  # how much each LED is lit by any burst
-        for centre, t0, rgb in self.bursts:
-            radius = (t - t0) * self.p["speed"]
-            dist = np.linalg.norm(g.xyz - centre, axis=1)
-            level = np.clip(1 - np.abs(dist - radius) / self.p["width"], 0, 1)
-            level *= max(1 - radius / self.p["size"], 0.0)
-            np.maximum(frame, level[:, None] * rgb, out=frame)
-            np.maximum(lit, level, out=lit)
-        return frame + (1 - lit)[:, None] * self.background()
+        # each burst covers the ones before it (and the background) where it's lit
+        frame = np.broadcast_to(self.background(), (self.n, 3)).astype(np.float32)
+        draw = self._ring if self.p["style"] == "ring" else self._explosion
+        for b in self.bursts:
+            level, rgb = draw(g.xyz, b, t - b.t0)
+            level = np.clip(level, 0, 1)[:, None]
+            frame = frame * (1 - level) + level * rgb
+        return frame
 
 
 @register
@@ -381,20 +489,129 @@ class Fill(_Effect3D):
     name = "fill"
     label = "Fill up"
     description = "The tree fills with colour from the bottom like a glass, a new colour each time."
-    params = (
-        Param("seconds", "float", 4.0, min=0.5, max=30, step=0.5, help="seconds per fill"),
-        Param("wave", "float", 0.05, min=0, max=0.25, step=0.01,
-              help="how much the surface sloshes, fraction of the tree height"),
-    )
+    params = _fill_params(0.05, "how much the surface sloshes, fraction of the tree height")
 
     def render_map(self, t: float, m: TreeMap) -> np.ndarray:
         g, wave = m.geometry, self.p["wave"]
-        k, f = divmod(t / self.p["seconds"], 1.0)
-        k = int(k)
+        k, f = self.fill_phase(t)
         lo, hi = g.lo[1] - 2 * wave - 0.03, g.hi[1] + 2 * wave + 0.03
         surface = lo + f * (hi - lo) + wave * np.sin(2 * g.theta + TAU * 0.7 * t) * np.sin(TAU * 0.3 * t)
         below = np.clip((surface - g.h) / 0.03 + 0.5, 0, 1)[:, None]  # soft edge
-        return below * cycle(k) + (1 - below) * cycle(k - 1)
+        new, old = self.fill_colors(k)
+        return below * new + (1 - below) * old
+
+
+@register
+class FillOut(_Effect3D):
+    name = "fillout"
+    label = "Fill outwards"
+    description = ("The tree fills with colour outwards from its middle (or the top, bottom "
+                   "or trunk), a new colour each time.")
+    params = (
+        Param("origin", "choice", "middle", choices=("middle", "top", "bottom", "trunk"),
+              help="where the colour starts; 'trunk' spreads sideways, filling each "
+                   "height from the inside out"),
+        *_fill_params(0.04, "how much the edge wobbles, fraction of the tree height"),
+    )
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, wave, origin = m.geometry, self.p["wave"], self.p["origin"]
+        k, f = self.fill_phase(t)
+        if origin == "trunk":
+            dist = g.r
+        else:
+            y = {"top": g.hi[1], "middle": (g.lo[1] + g.hi[1]) / 2, "bottom": g.lo[1]}[origin]
+            dist = np.linalg.norm(g.xyz - np.array([0, y, 0], np.float32), axis=1)
+        reach = float(dist[g.valid].max()) if g.valid.any() else 1.0
+        lo, hi = -2 * wave - 0.03, reach + 2 * wave + 0.03  # starts and ends off the tree
+        edge = lo + f * (hi - lo) + wave * np.sin(3 * g.theta + 5 * g.h + TAU * 0.6 * t) \
+            * np.sin(TAU * 0.35 * t)
+        inside = np.clip((edge - dist) / 0.03 + 0.5, 0, 1)[:, None]  # soft edge
+        new, old = self.fill_colors(k)
+        return inside * new + (1 - inside) * old
+
+
+FIRE = [(0, 0, 0), (110, 0, 0), (230, 30, 0), (255, 110, 0), (255, 180, 30), (255, 230, 150)]
+TONGUES = 7  # flame tongues round the trunk
+PUFFS = 10  # blobs of flame breaking off the tips
+SPARKS = 24
+
+
+@register
+class Fire(_Effect3D):
+    name = "fire"
+    label = "Campfire"
+    description = ("A campfire at the foot of the tree: glowing coals, flickering tongues of "
+                   "flame, puffs breaking off the tips and sparks flying up.")
+    params = (
+        Param("height", "float", 0.5, min=0.15, max=1.0, step=0.05,
+              help="how high the tallest flames reach, fraction of the tree height"),
+        Param("speed", "float", 1.0, min=0.2, max=3, step=0.05, help="how lively the fire is"),
+        Param("sparks", "int", 8, min=0, max=SPARKS, step=1, help="sparks flying up at once"),
+    )
+
+    def setup(self) -> None:
+        super().setup()
+        r = self.rng
+        self.coal_f = r.uniform(0.3, 1.2, self.n)  # each LED's own slow glow, as a coal
+        self.coal_p = r.uniform(0, TAU, self.n)
+        self.tongue_theta = (np.arange(TONGUES) + r.uniform(-0.3, 0.3, TONGUES)) * TAU / TONGUES
+        self.tongue_f = r.uniform(0.6, 1.6, (3, TONGUES))  # each tongue's own rhythm
+        self.tongue_p = r.uniform(0, TAU, (3, TONGUES))
+        self.puff_tongue = r.integers(TONGUES, size=PUFFS)
+        self.puff_rate = r.uniform(0.7, 1.4, PUFFS)  # puffs per second
+        self.puff_phase = r.uniform(0, 1, PUFFS)
+        self.spark_theta = r.uniform(0, TAU, SPARKS)
+        self.spark_rate = r.uniform(0.35, 0.7, SPARKS)  # rises per second
+        self.spark_phase = r.uniform(0, 1, SPARKS)
+
+    def _tongues(self, sp: float) -> tuple[np.ndarray, np.ndarray]:
+        """Each tongue's height (fraction of the tree) and angle round the trunk now."""
+        f, p = self.tongue_f, self.tongue_p
+        wobble = (0.55 * np.sin(TAU * f[0] * sp * 0.7 + p[0])
+                  + 0.3 * np.sin(TAU * f[1] * sp * 1.9 + p[1])
+                  + 0.15 * np.sin(TAU * f[2] * sp * 4.3 + p[2]))  # -1..1: rising and falling
+        height = self.p["height"] * (0.6 + 0.4 * wobble)
+        theta = self.tongue_theta + 0.25 * np.sin(TAU * f[1] * sp * 0.4 + p[2])  # swaying
+        return height, theta
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, sp = m.geometry, self.p["speed"] * t
+        span = max(float(g.hi[1] - g.lo[1]), 1e-6)
+        h = (g.h - g.lo[1]) / span  # 0 at the bottom LED, 1 at the top
+        th = g.theta
+
+        # the bed of coals: a low band glowing and dimming in patches
+        coals = np.clip(1 - h / 0.1, 0, 1) * (0.45 + 0.15 * np.sin(TAU * self.coal_f * t + self.coal_p))
+
+        # tongues of flame: hot in the middle and near the bottom, narrowing to a tip
+        heights, thetas = self._tongues(sp)
+        dth = np.angle(np.exp(1j * (th[:, None] - thetas[None])))  # (N, tongues), -π..π
+        up = np.clip(h[:, None] / heights[None], 0, 1.2)
+        below = np.clip(1 - up, 0, 1)  # 1 at the bottom, 0 at (and above) the tip
+        width = 0.38 * below**0.8 + 0.04  # radians each side, narrowing upwards
+        tongue = np.exp(-((dth / width) ** 2)) * below**0.6
+        heat = np.maximum(coals, tongue.max(axis=1))
+
+        # puffs: blobs breaking off a tongue's tip, rising, shrinking and cooling
+        life = (self.puff_phase + self.puff_rate * sp * 0.6) % 1.0
+        tip = heights[self.puff_tongue]
+        ph = tip * 0.85 + life * 0.25
+        pt = thetas[self.puff_tongue] + 0.3 * np.sin(TAU * life + self.puff_phase * 7)
+        size = 0.06 * (1 - life) + 0.015
+        d2 = ((h[:, None] - ph[None]) / size[None]) ** 2 + (
+            np.angle(np.exp(1j * (th[:, None] - pt[None]))) / (2.5 * size[None])) ** 2
+        heat = np.maximum(heat, (0.75 * (1 - life)[None] * np.exp(-d2)).max(axis=1))
+
+        k = self.p["sparks"]
+        if k:  # sparks: tiny bright points flying up fast, zig-zagging
+            rise = (self.spark_phase[:k] + self.spark_rate[:k] * sp) % 1.0
+            sh = 0.1 + rise * 0.95
+            st = self.spark_theta[:k] + 0.35 * np.sin(TAU * rise * 2.5 + self.spark_phase[:k] * 9)
+            d2 = ((h[:, None] - sh[None]) / 0.025) ** 2 + (
+                np.angle(np.exp(1j * (th[:, None] - st[None]))) / 0.12) ** 2
+            heat = np.maximum(heat, (0.85 * (1 - rise[None]) * np.exp(-d2)).max(axis=1))
+        return gradient_stops(FIRE, heat)
 
 
 @register
