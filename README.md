@@ -119,6 +119,7 @@ Keep `treemap sim view` running in one terminal to watch; run these in another.
 | Run an effect | `treemap run rainbow -p speed=0.5 --seconds 30` |
 | Run a 3D effect on the true positions | `treemap run plane -p direction=around --map truth` |
 | Check the WLED controllers' settings | `treemap wled check` |
+| Serve the API for the phone's scan page | `treemap serve` (see [The server](#the-server-treemap-serve)) |
 | Check the camera can scan (and measure its colours) | `treemap camera check [--brightness 100]` |
 | Show the config | `treemap config show` |
 
@@ -144,9 +145,12 @@ To deal with a yellow or red LED, select it in the Mapping panel or run `treemap
 
 ## Configuration
 
-`config.yaml` in the project folder. Every key is optional, and `treemap config show`
-prints the effective values. Use `-c other.yaml` or `TREEMAP_CONFIG` to choose another
-file. The number of LEDs isn't a key: in the simulator it's the simulated tree's, on the
+`config.yaml` in the project folder lists every key with its default and what it does.
+Put your own settings in `config.local.yaml` next to it: git ignores that file, and
+treemap reads it instead of `config.yaml` when it exists. Every key is optional, so it
+only needs what differs from the defaults. `treemap config show` prints the effective
+values and which file they came from. Use `-c other.yaml` or `TREEMAP_CONFIG` to choose
+another file. The number of LEDs isn't a key: in the simulator it's the simulated tree's, on the
 real tree it's where the last controller's LEDs end. The keys you're most likely to
 change:
 
@@ -154,7 +158,7 @@ change:
 |---|---|
 | `shape` | `tree` (mapped in 3D) or `flat` (strips on the floor or a wall, mapped in 2D; see [Flat layouts](#flat-layouts-strips-on-the-floor-or-a-wall)). |
 | `output` | `sim` (the browser viewer) or `wled` (the controllers, see [Real LEDs](#real-leds-wled)). |
-| `controllers` | WLED controllers, each owning a slice of the LED indices; `reverse: true` for a strip wired from the other end. |
+| `controllers` | WLED controllers in LED order; only `host` is needed (the LED count is read from WLED). `reverse: true` for a strip wired from the other end. |
 | `camera.type`, `camera.url` | `sim` (the viewer's virtual phone), or `android` with the IP Webcam URL (see [Real camera](#real-camera-an-android-phone)). |
 | `camera.fov_deg` | The phone camera's horizontal field of view; a starting guess the solve refines. |
 | `scan.round_s`, `scan.status_s` | Seconds of flashing per round, and of status colours between rounds. |
@@ -168,6 +172,7 @@ change:
 | `engine.gamma` | Gamma correction of effect frames. `null` = 1 in the simulator (the screen already applies one) and 2.2 on WLED (LEDs are linear). |
 | `sim.strips`, `sim.height`, `sim.radius`, `sim.layout`, `sim.seed` | Defaults for generated trees (`null` = random). |
 | `sim.hidden_leds` | LEDs the virtual phone never sees, e.g. `"57, 120-127"`, to try out fixing bad LEDs. |
+| `server.port`, `server.origins` | `treemap serve`'s port, and the web pages allowed to use it from a browser. |
 
 ## Files
 
@@ -188,24 +193,29 @@ protocol WLED receives by default. In `config.yaml`:
 ```yaml
 output: wled
 controllers:
-  - {host: 192.168.1.51, start: 0, count: 400, reverse: false}
+  - host: 192.168.1.51
+  - {host: 192.168.1.52, reverse: true}
 ```
 
 - `host` is the controller's IP address or name (`wled-xxxx.local`). If the name doesn't
   resolve, use the IP address shown in the WLED app.
-- Each controller drives the LEDs `start` to `start + count - 1` of treemap's numbering,
-  as its own LEDs 0, 1, …; `reverse: true` if its strip is wired from the other end.
-  Between them, the controllers cover every LED from 0. That's also how many LEDs
-  treemap drives.
+- Each controller's LED count is read from WLED (its LED Preferences), and its LEDs
+  follow on from the previous controller's: here 192.168.1.51 drives treemap's LEDs 0
+  to 199 and 192.168.1.52 the next 200, if each is set up for 200. `reverse: true` if
+  its strip is wired from the other end. `count` and `start` set them by hand instead,
+  for example when a controller isn't always on. The last controller's last LED is how
+  many LEDs treemap drives.
 
 Then:
 
 1. `treemap wled check` asks each controller for its settings. It warns if WLED is set
-   up for a different number of LEDs than `count`, or if WLED's own brightness is below
-   full (it dims treemap's colours as well; treemap has `engine.brightness`).
+   up for a different number of LEDs than a `count` you set, if WLED's own brightness is
+   below full (it dims treemap's colours as well; treemap has `engine.brightness`), or if
+   WiFi sleep is on (it makes effects stutter).
 2. `treemap test chase` runs a light from LED 0 to the last one: check the order and
    that each strip starts where you expect. `treemap test led 57` lights one LED.
-3. `treemap run rainbow` (or any effect) runs it on the LEDs. The 3D effects need a
+3. `treemap run rainbow` (or any effect) runs it on the LEDs, and shows the frame rate
+   it keeps, with the time to render and to send each frame. The 3D effects need a
    scanned map. `treemap sim view` drives the controllers from the viewer's Effects step
    too. If the viewer is open, it mirrors what the LEDs show, on the scanned map (with
    a real camera it doesn't show the simulated tree).
@@ -213,6 +223,31 @@ Then:
 WLED shows treemap's colours while they keep arriving and goes back to its own effect a
 few seconds after they stop. If WLED's settings show "Receive UDP realtime" switched
 off (Sync Interfaces), switch it on. `engine.gamma` defaults to 2.2 on WLED.
+
+## The server: `treemap serve`
+
+`treemap serve` is the server of treemap 2.0 (see [PLAN-2.0.md](PLAN-2.0.md)): it drives
+the LEDs and runs scans and effects, and a web page on the phone drives it over the
+local network. It listens on every interface on port 8765 (`server.port`) and prints its
+address. The API is under `/api/v1`:
+
+| Endpoint | What it does |
+|---|---|
+| `GET /info` | API version, the LEDs and controllers, the current map, what's using the LEDs, engine timing |
+| `POST /leds` | A test pattern: `{"mode": "chase"}`, `off`, `white`, `solid` (`color`), `led` (`index`), `status` |
+| `POST /play` | Run an effect: `{"effect": "rainbow", "params": {}}` |
+| `POST /scan/start`, `/scan/stop` | Start or stop a scan (`shape`, `symbol_ms`, `brightness`, `rounds`, all optional) |
+| `GET /scan/state` | The scan's phase, round, time left and counts; after a round, each LED's status |
+| `POST /scan/frames` | Camera frames from the page (`application/octet-stream`) |
+
+For example, `curl -X POST -H 'Content-Type: application/json' -d '{"mode":"chase"}'
+http://<server>:8765/api/v1/leds` does what `treemap test chase` does. Browsers may only
+use the API from the pages in `server.origins`.
+
+To try it on the simulated tree: `treemap serve --sim` drives the viewer's LEDs instead
+of the configured ones (on port 8766 when the viewer has 8765), and `treemap sim view
+--serve` opens the viewer with its virtual phone filming for that server too. Walk round
+the tree (`f`) and start a scan through the API; the phone inset shows the round.
 
 ## Real camera: an Android phone
 

@@ -12,19 +12,18 @@ shape: tree
 # Where colours go: "sim" (browser viewer) or "wled" (DDP over UDP to the controllers below).
 output: sim
 
-# WLED controllers. Each one owns a contiguous slice [start, start + count) of the global
-# LED index; between them they cover every LED from 0, without gaps. "reverse" flips the
-# order within that slice (strand wired from the other end). host is the controller's
-# name or IP address; use the IP if the .local name doesn't resolve. `treemap wled check`
-# checks each one's WLED settings against this.
+# WLED controllers, in the order their LEDs are numbered. host is the controller's name
+# or IP address; use the IP if the .local name doesn't resolve. That's all each one
+# needs: its LED count is read from WLED (set it in WLED's LED Preferences), and its
+# LEDs follow on from the previous controller's. Optional overrides: count (LEDs it
+# drives), start (its first LED's global index) and reverse (strand wired from the
+# other end). Between them they cover every LED from 0, without gaps.
+# `treemap wled check` checks each one's WLED settings.
 controllers:
   - host: wled-tree.local
-    start: 0
-    count: 400
-    reverse: false
-# Two-controller example:
-#  - {host: 192.168.1.51, start: 0,   count: 200, reverse: false}
-#  - {host: 192.168.1.52, start: 200, count: 200, reverse: true}
+# Two-controller example (the second one wired from the far end):
+#  - host: 192.168.1.51
+#  - {host: 192.168.1.52, reverse: true}
 
 # Where the scan's video comes from: "sim" (the viewer's virtual phone: walk round the
 # tree with WASD and the mouse) or "android" (the IP Webcam app's stream, at the address
@@ -54,6 +53,14 @@ engine:
   crossfade: 0.6       # seconds to blend when switching effects
   gamma: null          # null = 1 in the simulator, 2.2 on WLED (LEDs are linear: without it,
                        # fades look too bright). Lower it if dim colours look too dark.
+
+# `treemap serve`: the API the phone's scan page uses, on the local network.
+server:
+  host: 0.0.0.0        # every network interface, so the phone can reach it
+  port: 8765           # with output: sim, use another port than sim.port
+  origins:             # web pages allowed to use it from a browser; "*" allows any
+    - https://treemap-spike.pages.dev
+    - http://localhost:5173
 
 # The simulated tree (also editable in the viewer's Tree panel). null = random.
 sim:

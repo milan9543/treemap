@@ -44,22 +44,22 @@ def ensure_sim_tree(cfg: Config) -> bool:
     return True
 
 
-def camera_colours(cfg: Config) -> tuple[ColourModel | None, str | None]:
-    """The configured camera's measured colours (from ``treemap camera check``), and if
-    there aren't any usable, why: ``(None, message)``. The sim camera's colours are pure
-    enough not to need them."""
+def camera_colours(cfg: Config, camera_id: str | None = None) -> tuple[ColourModel | None, str | None]:
+    """The measured colours (from ``treemap camera check``) of the configured camera, or
+    of ``camera_id``, and if there aren't any usable, why: ``(None, message)``. The sim
+    camera's colours are pure enough not to need them."""
     from treemap.scan.colours import ColourError, ColourModel
 
+    camera_id = camera_id or cfg.camera_id
     path = cfg.colours_path
     if not path.exists():
-        return None, (None if cfg.camera.type == "sim" else
-                      "this camera's colours haven't been measured: run `treemap camera "
-                      "check` first, or colours may be misread")
+        return None, (None if camera_id == "sim" else
+                      "this camera's colours haven't been measured, so colours may be misread")
     try:
         model = ColourModel.load(path)
     except ColourError as e:
         return None, f"ignoring the measured colours: {e}"
-    if model.meta.get("camera") != cfg.camera_id:
+    if model.meta.get("camera") != camera_id:
         return None, (f"the measured colours are for another camera "
                       f"({model.meta.get('camera')}); run `treemap camera check` again")
     measured_at = model.meta.get("brightness")
@@ -88,12 +88,15 @@ def run_scan(
     *,
     rounds: int | None = None,
     sim_port: int | None = None,
+    camera: Camera | None = None,
+    camera_id: str | None = None,
     on_update: Callable[[dict], None] = lambda u: None,
     check_cancel: Callable[[], None] = lambda: None,
     on_message: Callable[[str], None] = lambda m: None,
 ) -> TreeMap | None:
     """Scan from scratch, in rounds (see :mod:`treemap.scan.free`), with the configured
-    camera. Earlier rounds are forgotten; the rounds of this scan build on each other.
+    camera, or ``camera`` (named ``camera_id`` for its measured colours). Earlier rounds
+    are forgotten; the rounds of this scan build on each other.
 
     First the camera gets ready (:func:`prepare_camera`: a countdown, then the Android
     camera's exposure and colours). ``on_update`` gets progress dicts, ``round`` 0 while
@@ -104,13 +107,15 @@ def run_scan(
     from treemap.cameras.browser import CameraUnavailable
     from treemap.scan.free import ScanError, scan
 
-    try:
-        camera = create_camera(cfg, sim_port)
-    except (CameraError, NotImplementedError) as e:
-        raise WorkflowError(str(e)) from None
+    if camera is None:
+        try:
+            camera = create_camera(cfg, sim_port)
+        except (CameraError, NotImplementedError) as e:
+            raise WorkflowError(str(e)) from None
     with camera:
         try:
-            colours = prepare_camera(cfg, camera, output, on_update, check_cancel, on_message)
+            colours = prepare_camera(cfg, camera, output, on_update, check_cancel, on_message,
+                                     camera_id)
             return scan(output, camera, scan_settings(cfg, colours), fresh=True, rounds=rounds,
                         on_update=on_update, check_cancel=check_cancel)
         except (ScanError, CameraUnavailable) as e:
@@ -124,6 +129,7 @@ def prepare_camera(
     on_update: Callable[[dict], None] = lambda u: None,
     check_cancel: Callable[[], None] = lambda: None,
     on_message: Callable[[str], None] = lambda m: None,
+    camera_id: str | None = None,
 ) -> ColourModel | None:
     """Get the camera ready to scan; returns the colours to read the code by.
 
@@ -147,8 +153,8 @@ def prepare_camera(
         output.show(glow)
         on_update({"round": 0, "phase": "countdown", "remaining": round(left, 1)})
         time.sleep(min(0.25, left))
-    if not hasattr(camera, "exposure"):  # the sim camera: nothing to set
-        colours, problem = camera_colours(cfg)
+    if not hasattr(camera, "exposure"):  # the sim camera or the phone's page: nothing to set
+        colours, problem = camera_colours(cfg, camera_id)
         if problem:
             on_message(problem)
         return colours
@@ -165,7 +171,7 @@ def prepare_camera(
         on_message("colours read right: " + ", ".join(f"{r.name} {r.share:.0%}" for r in results))
         return model
     on_message("too few LEDs seen to measure the colours; point the camera at the LEDs")
-    colours, problem = camera_colours(cfg)
+    colours, problem = camera_colours(cfg, camera_id)
     if problem:
         on_message(problem)
     return colours

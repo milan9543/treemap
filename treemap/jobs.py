@@ -6,8 +6,10 @@ so it first stops the effects engine via ``stop_effects``.
 
 Job kinds and their parameters:
 
-* ``scan``: ``rounds`` (int, default scan.max_rounds). Starts over (earlier rounds are
-  forgotten) and runs until every LED is ok, the rounds are done, or it's stopped.
+* ``scan``: ``rounds`` (int, default scan.max_rounds); ``shape`` (tree or flat),
+  ``symbol_ms`` and ``brightness`` override the config for this scan. Starts over
+  (earlier rounds are forgotten) and runs until every LED is ok, the rounds are done, or
+  it's stopped.
 * ``reconstruct``: solve again from the saved rounds
 * ``evaluate`` (simulator only)
 * ``interpolate``, ``measure``: ``index``; interpolate ignores that LED's observations
@@ -17,6 +19,7 @@ Job kinds and their parameters:
 from __future__ import annotations
 
 import copy
+import dataclasses
 import logging
 import threading
 import time
@@ -24,7 +27,8 @@ from collections.abc import Callable
 from typing import Any
 
 from treemap import workflow
-from treemap.config import Config
+from treemap.cameras.base import Camera
+from treemap.config import SHAPES, Config
 from treemap.outputs.base import LedOutput
 
 log = logging.getLogger(__name__)
@@ -50,9 +54,14 @@ class Jobs:
         on_change: Callable[[dict], None] | None = None,
         progress_interval: float = 0.1,
         sim_port: int | None = None,
+        camera: Camera | None = None,
+        camera_id: str | None = None,
     ) -> None:
         self.cfg = cfg
         self.sim_port = sim_port  # where the viewer's camera frames come from
+        # The camera scans use instead of the configured one (the phone's page, for
+        # `treemap serve`), and the name its measured colours are kept under.
+        self.camera, self.camera_id = camera, camera_id
         self.output_factory = output_factory
         self.stop_effects = stop_effects
         self.on_change = on_change
@@ -171,16 +180,28 @@ class Jobs:
     # -- the jobs: _prepare_* validates parameters, then returns the work ---------------
 
     def _prepare_scan(self, p: dict) -> Callable[[], dict]:
-        cfg = self.cfg
         rounds = p.get("rounds")
-        if rounds is not None and (isinstance(rounds, bool) or not isinstance(rounds, int)
-                                   or rounds < 1):
+        if rounds is not None and not _whole(rounds, 1):
             raise workflow.WorkflowError("rounds must be a whole number >= 1")
+        cfg = copy.copy(self.cfg)  # shallow: keeps the controllers already read from WLED
+        if p.get("shape") is not None:
+            if p["shape"] not in SHAPES:
+                raise workflow.WorkflowError(f"shape must be one of {', '.join(SHAPES)}")
+            cfg.shape = p["shape"]
+        limits = {"symbol_ms": (40, 2000), "brightness": (1, 255)}
+        changes = {}
+        for key, (lo, hi) in limits.items():
+            if p.get(key) is not None:
+                if not _whole(p[key], lo, hi):
+                    raise workflow.WorkflowError(f"{key} must be a whole number {lo}-{hi}")
+                changes[key] = p[key]
+        cfg.scan = dataclasses.replace(cfg.scan, **changes)
 
         def run() -> dict:
             workflow.ensure_sim_tree(cfg)
             tree_map = self._with_output(lambda out: workflow.run_scan(
-                cfg, out, rounds=rounds, sim_port=self.sim_port,
+                cfg, out, rounds=rounds, sim_port=self.sim_port, camera=self.camera,
+                camera_id=self.camera_id,
                 on_update=self._on_update, check_cancel=self._check_cancel,
             ))
             return workflow.map_summary(tree_map) if tree_map is not None else {}
@@ -222,3 +243,8 @@ class Jobs:
         tree_map, _ = workflow.rebuild_map(self.cfg)
         return {"index": index, "status": str(tree_map.status[index]),
                 **workflow.map_summary(tree_map)}
+
+
+def _whole(v: Any, lo: int, hi: int | None = None) -> bool:
+    return (not isinstance(v, bool) and isinstance(v, int) and v >= lo
+            and (hi is None or v <= hi))

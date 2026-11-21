@@ -147,12 +147,26 @@ def fetch_state(host: str, timeout: float = 3.0) -> dict[str, Any]:
     return data
 
 
+def fetch_cfg(host: str, timeout: float = 3.0) -> dict[str, Any]:
+    """WLED's settings (``/json/cfg``), or {} if it doesn't answer: they're only checked."""
+    import requests
+
+    try:
+        r = requests.get(f"http://{host}/json/cfg", timeout=timeout)
+        r.raise_for_status()
+        data = r.json()
+    except (requests.RequestException, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 def check_problems(c: Controller, data: dict[str, Any], index: int = 0) -> list[str]:
-    """What in WLED's settings doesn't fit controller ``c`` of the config."""
+    """What in WLED's settings doesn't fit controller ``c`` of the config. ``data`` is
+    WLED's ``/json``, with its ``/json/cfg`` under ``"cfg"`` if that was read."""
     problems = []
     info, state = data.get("info", {}), data.get("state", {})
     count = info.get("leds", {}).get("count")
-    if isinstance(count, int) and count != c.count:
+    if c.count is not None and isinstance(count, int) and count != c.count:
         if count < c.count:
             problems.append(
                 f"WLED is set up for {count} LEDs but controllers[{index}].count is {c.count}: "
@@ -169,5 +183,10 @@ def check_problems(c: Controller, data: dict[str, Any], index: int = 0) -> list[
             f"WLED's brightness is {bri}/255 and it dims treemap's colours too. Set it to "
             "full, or tick \"Force max brightness\" in WLED's Sync Interfaces settings "
             "(treemap has its own brightness, engine.brightness)."
+        )
+    if data.get("cfg", {}).get("wifi", {}).get("sleep") is True:
+        problems.append(
+            "WiFi sleep is on, which delays packets and makes effects stutter. Tick "
+            "\"Disable WiFi sleep\" in WLED's WiFi Settings."
         )
     return problems

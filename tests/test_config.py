@@ -154,3 +154,38 @@ def test_led_count_comes_from_the_tree_or_the_controllers(tmp_path):
     wled = config_from_dict({"output": "wled", "controllers": [
         {"host": "a", "count": 200}, {"host": "b", "start": 200, "count": 250}]})
     assert wled.led_count == 450
+
+
+def test_controllers_need_only_a_host(monkeypatch):
+    """A missing count is read from WLED; a missing start follows the previous controller."""
+    from treemap.outputs import OutputError
+    from treemap.outputs import wled
+
+    counts = {"a": 150, "b": 250}
+    asked = []
+
+    def fake_fetch(host, timeout=3.0):
+        asked.append(host)
+        if host not in counts:
+            raise OutputError(f"can't connect to http://{host}/")
+        return {"info": {"leds": {"count": counts[host]}}}
+
+    monkeypatch.setattr(wled, "fetch_state", fake_fetch)
+    cfg = config_from_dict({"output": "wled", "controllers": [
+        {"host": "a"}, {"host": "b", "reverse": True}]})
+    assert cfg.led_count == 400
+    assert [(c.start, c.count, c.reverse) for c in cfg.controller_layout()] == [
+        (0, 150, False), (150, 250, True)]
+    assert cfg.led_count == 400 and asked == ["a", "b"]  # read once, then kept
+
+    gone = config_from_dict({"output": "wled", "controllers": [{"host": "c"}]})
+    with pytest.raises(ConfigError, match=r"controllers\[0\].*can't connect.*Set controllers\[0\]\.count"):
+        gone.led_count
+
+
+def test_config_local_yaml_wins_over_config_yaml(write_config):
+    write_config("output: sim\n")
+    assert load_config().output == "sim"
+    write_config("shape: flat\n", name="config.local.yaml")
+    cfg = load_config()
+    assert cfg.shape == "flat" and cfg.source.name == "config.local.yaml"

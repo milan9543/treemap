@@ -190,7 +190,7 @@ async function device() {
 
 // ---------- 1.1 ping ----------
 async function ping() {
-  const url = server() + "/ping";
+  const url = server() + (params.get("ping") || "/ping"); // ?ping=/api/v1/info: the real server
   const before = await lnaPermission();
   log("ping", url, "permission before:", before);
   const t0 = performance.now();

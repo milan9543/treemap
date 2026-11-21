@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 
 DEFAULT_CONFIG_PATH = Path("config.yaml")
+LOCAL_CONFIG_PATH = Path("config.local.yaml")  # your own settings, not in git
 CONFIG_ENV_VAR = "TREEMAP_CONFIG"
 
 OUTPUT_TYPES = ("sim", "wled")
@@ -38,11 +39,16 @@ class ConfigError(ValueError):
 
 @dataclass
 class Controller:
-    """One WLED controller owning global LEDs ``[start, start + count)``."""
+    """One WLED controller owning global LEDs ``[start, start + count)``.
+
+    Only ``host`` is required: ``start`` defaults to where the previous controller's LEDs
+    end (0 for the first), and ``count`` to the LED count set in WLED itself, read from
+    the controller (see :meth:`Config.controller_layout`).
+    """
 
     host: str
-    start: int = 0
-    count: int = 400
+    start: int | None = None
+    count: int | None = None
     reverse: bool = False
 
 
@@ -96,6 +102,19 @@ class SimConfig:
     port: int = 8765
 
 
+DEFAULT_ORIGINS = ("https://treemap-spike.pages.dev", "http://localhost:5173")
+
+
+@dataclass
+class ServerConfig:
+    """``treemap serve``: the HTTP API the phone's page talks to."""
+
+    host: str = "0.0.0.0"  # every network interface, so the phone can reach it
+    port: int = 8765
+    # Web pages allowed to use the API from a browser (CORS). "*" allows any.
+    origins: list[str] = field(default_factory=lambda: list(DEFAULT_ORIGINS))
+
+
 @dataclass
 class Config:
     # tree: LEDs wound round a tree, mapped in 3D. flat: LEDs laid on the floor (or on a
@@ -103,11 +122,12 @@ class Config:
     shape: str = "tree"
     output: str = "sim"
     controllers: list[Controller] = field(
-        default_factory=lambda: [Controller(host="wled-tree.local", start=0, count=400)]
+        default_factory=lambda: [Controller(host="wled-tree.local")]
     )
     camera: CameraConfig = field(default_factory=CameraConfig)
     scan: ScanConfig = field(default_factory=ScanConfig)
     engine: EngineConfig = field(default_factory=EngineConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)
     sim: SimConfig = field(default_factory=SimConfig)
 
     # Not a config key: directory relative paths are resolved against.
@@ -117,6 +137,18 @@ class Config:
     # Not a config key: the simulated tree's LED count, keyed by its file's mtime and size.
     _tree_count: tuple[Any, int] | None = field(default=None, init=False, repr=False,
                                                 compare=False)
+    # Not a config key: the controllers with every start and count filled in.
+    _layout: list[Controller] | None = field(default=None, init=False, repr=False,
+                                             compare=False)
+
+    def controller_layout(self) -> list[Controller]:
+        """The controllers with ``start`` and ``count`` filled in: a missing count is
+        read from the controller's WLED (once, then kept), a missing start is where the
+        previous controller ends. Raises :class:`ConfigError` if a controller whose count
+        is needed can't be reached, or the LEDs overlap or leave a gap."""
+        if self._layout is None:
+            self._layout = layout_controllers(self.controllers, self.output, _wled_led_count)
+        return self._layout
 
     @property
     def led_count(self) -> int:
@@ -124,7 +156,7 @@ class Config:
         the tree file changes, so a tree generated in the viewer counts at once), else
         where the last controller's LEDs end."""
         if self.output == "wled":
-            return max((c.start + c.count for c in self.controllers), default=0)
+            return max((c.start + c.count for c in self.controller_layout()), default=0)
         path = self.sim_tree_path
         try:
             st = path.stat()
@@ -193,7 +225,7 @@ class Config:
     def to_dict(self) -> dict[str, Any]:
         """The config as plain data, without the non-key fields."""
         d = asdict(self)
-        for key in ("base_dir", "source", "_tree_count"):
+        for key in ("base_dir", "source", "_tree_count", "_layout"):
             d.pop(key)
         return d
 
@@ -205,27 +237,27 @@ class Config:
             where = f"controllers[{i}]"
             if not isinstance(c.host, str) or not c.host:
                 raise ConfigError(f"{where}.host must be a non-empty string")
-            _check_int(f"{where}.start", c.start, minimum=0)
-            _check_int(f"{where}.count", c.count, minimum=1)
+            if c.start is not None:
+                _check_int(f"{where}.start", c.start, minimum=0)
+            if c.count is not None:
+                _check_int(f"{where}.count", c.count, minimum=1)
             _check_bool(f"{where}.reverse", c.reverse)
-        ranges = sorted((c.start, c.start + c.count, i) for i, c in enumerate(self.controllers))
-        for (_, end_a, ia), (start_b, _, ib) in zip(ranges, ranges[1:]):
-            if start_b < end_a:
-                raise ConfigError(f"controllers[{ia}] and controllers[{ib}] overlap")
-        if self.output == "wled":
-            if not self.controllers:
-                raise ConfigError("output: wled needs at least one entry in controllers")
-            # the controllers define the LEDs, so between them they must cover 0..N-1
-            end = 0
-            for start, stop, i in ranges:
-                if start > end:
-                    raise ConfigError(
-                        f"no controller drives LEDs {end}-{start - 1}; "
-                        f"controllers[{i}] starts at {start}"
-                    )
-                end = stop
-            if end > MAX_LEDS:
-                raise ConfigError(f"the controllers drive {end} LEDs; at most {MAX_LEDS}")
+        if self.output == "wled" and not self.controllers:
+            raise ConfigError("output: wled needs at least one entry in controllers")
+        if all(c.count is not None for c in self.controllers):
+            # Everything is known without asking WLED: check the layout now.
+            self._layout = layout_controllers(self.controllers, self.output, None)
+
+        srv = self.server
+        if not isinstance(srv.host, str) or not srv.host:
+            raise ConfigError("server.host must be a non-empty string")
+        _check_int("server.port", srv.port, minimum=1, maximum=65535)
+        if not isinstance(srv.origins, list):
+            raise ConfigError("server.origins must be a list of web page origins")
+        for o in srv.origins:
+            if o != "*" and not (isinstance(o, str) and ORIGIN_RE.fullmatch(o)):
+                raise ConfigError(f"server.origins: {o!r} isn't an origin like "
+                                  "https://example.com or http://localhost:5173 (no path)")
 
         _check_choice("camera.type", self.camera.type, CAMERA_TYPES)
         if self.camera.url is not None and not isinstance(self.camera.url, str):
@@ -280,6 +312,56 @@ class Config:
         _check_int("sim.port", self.sim.port, minimum=1, maximum=65535)
 
 
+ORIGIN_RE = re.compile(r"https?://[A-Za-z0-9.\-\[\]:]+")
+
+
+def layout_controllers(controllers: list[Controller], output: str, count_of) -> list[Controller]:
+    """Fill in each controller's ``start`` (where the previous one ends) and ``count``
+    (``count_of(index, controller)``, for ones that don't set it), then check the LEDs
+    don't overlap and, with ``output: wled``, cover 0..N-1 without a gap."""
+    out: list[Controller] = []
+    end = 0
+    for i, c in enumerate(controllers):
+        start = c.start if c.start is not None else end
+        count = c.count if c.count is not None else count_of(i, c)
+        out.append(Controller(c.host, start, count, c.reverse))
+        end = start + count
+    ranges = sorted((c.start, c.start + c.count, i) for i, c in enumerate(out))
+    for (_, end_a, ia), (start_b, _, ib) in zip(ranges, ranges[1:]):
+        if start_b < end_a:
+            raise ConfigError(f"controllers[{ia}] and controllers[{ib}] overlap")
+    if output == "wled":
+        # the controllers define the LEDs, so between them they must cover 0..N-1
+        end = 0
+        for start, stop, i in ranges:
+            if start > end:
+                raise ConfigError(
+                    f"no controller drives LEDs {end}-{start - 1}; "
+                    f"controllers[{i}] starts at {start}"
+                )
+            end = stop
+        if end > MAX_LEDS:
+            raise ConfigError(f"the controllers drive {end} LEDs; at most {MAX_LEDS}")
+    return out
+
+
+def _wled_led_count(index: int, c: Controller) -> int:
+    """The LED count set in a controller's WLED."""
+    from treemap.outputs.base import OutputError
+    from treemap.outputs.wled import fetch_state
+
+    try:
+        count = fetch_state(c.host)["info"].get("leds", {}).get("count")
+    except OutputError as e:
+        raise ConfigError(f"controllers[{index}] has no count, so it's read from WLED, but "
+                          f"{str(e).rstrip('.?')}. Set controllers[{index}].count to go on "
+                          "without it.") from None
+    if isinstance(count, bool) or not isinstance(count, int) or count < 1:
+        raise ConfigError(f"controllers[{index}]: WLED at {c.host} reports no LED count; "
+                          "set its LED count in WLED's LED Preferences, or count in the config")
+    return count
+
+
 def parse_leds(text: str, led_count: int) -> list[int]:
     """``"120-140"``, ``"5"`` or ``"1-3,7,10-12"`` (inclusive) as sorted indices."""
     out: set[int] = set()
@@ -298,9 +380,11 @@ def parse_leds(text: str, led_count: int) -> list[int]:
 
 
 def find_config_path(explicit: str | Path | None = None) -> Path | None:
-    """Pick the config file: explicit path, then $TREEMAP_CONFIG, then ./config.yaml.
+    """Pick the config file: explicit path, then $TREEMAP_CONFIG, then
+    ./config.local.yaml (your own settings, kept out of git), then ./config.yaml (the
+    documented defaults).
 
-    An explicit or env path must exist; ./config.yaml is optional (None if absent).
+    An explicit or env path must exist; the others are optional (None if absent).
     """
     chosen = explicit or os.environ.get(CONFIG_ENV_VAR)
     if chosen:
@@ -308,7 +392,10 @@ def find_config_path(explicit: str | Path | None = None) -> Path | None:
         if not path.is_file():
             raise ConfigError(f"config file not found: {path}")
         return path
-    return DEFAULT_CONFIG_PATH if DEFAULT_CONFIG_PATH.is_file() else None
+    for path in (LOCAL_CONFIG_PATH, DEFAULT_CONFIG_PATH):
+        if path.is_file():
+            return path
+    return None
 
 
 def load_config(path: str | Path | None = None) -> Config:
@@ -332,7 +419,7 @@ def load_config(path: str | Path | None = None) -> Config:
 def config_from_dict(data: Any, where: str = "config") -> Config:
     """Build and validate a :class:`Config` from parsed YAML data."""
     try:
-        cfg = _build(Config, data, "", skip={"base_dir", "source", "_tree_count"})
+        cfg = _build(Config, data, "", skip={"base_dir", "source", "_tree_count", "_layout"})
         cfg.validate()
     except ConfigError as e:
         raise ConfigError(f"{where}: {e}") from None
@@ -345,6 +432,7 @@ _NESTED: dict[tuple[type, str], tuple[type, bool]] = {
     (Config, "camera"): (CameraConfig, False),
     (Config, "scan"): (ScanConfig, False),
     (Config, "engine"): (EngineConfig, False),
+    (Config, "server"): (ServerConfig, False),
     (Config, "sim"): (SimConfig, False),
     (SimConfig, "strips"): (StripConfig, True),
 }

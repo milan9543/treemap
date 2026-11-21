@@ -153,6 +153,16 @@ itself; white balance is locked through a `colorTemperature` preset. 720p upload
 
 ## Phase 2: server foundations
 
+**Built** (2026-11-21): `treemap serve` ([treemap/api/](treemap/api/)), on the standard
+library's threaded HTTP server; `HttpCamera` ([treemap/cameras/http.py](treemap/cameras/http.py));
+controllers with only a host; engine timing. Tested on this Mac, with the simulated LEDs
+and a stand-in phone that uploads rendered frames. Still to check on the real tree:
+2.2 from the phone (`https://treemap-spike.pages.dev/?server=http://<ip>:8765&ping=/api/v1/info`),
+2.3 chase on the LEDs, 2.5 with only the host, 2.5b stutter. Changes from the sketch:
+`POST /play` already runs an effect (Phase 6 adds favourites and playlists); a frame
+batch is each frame with a 4-byte length in front; `/scan/state` gives each LED's
+status as one letter (o, i, f).
+
 - **2.1 `treemap serve`.** A server command that listens on the LAN (`0.0.0.0`) without
   the simulator, with `GET /api/v1/info`.
   **Done when:** `curl http://<ip>:8765/api/v1/info` works from another machine.

@@ -10,6 +10,7 @@ linear, so without it the dim half of every fade looks too bright on a real tree
 
 from __future__ import annotations
 
+import collections
 import logging
 import threading
 import time
@@ -22,6 +23,9 @@ from treemap.effects import Effect, EffectContext, MapEffect, create_effect
 from treemap.outputs.base import LedOutput
 
 log = logging.getLogger(__name__)
+
+TIMING_WINDOW_S = 2.0  # timing() describes the last this many seconds
+SLOW = 0.9  # warn below this share of the target frame rate
 
 
 class Engine:
@@ -46,6 +50,11 @@ class Engine:
             255 * (np.arange(256) / 255) ** gamma).astype(np.uint8)
         self.error: str | None = None
         self.frames = 0
+        # Per frame, for timing(): (start, render s, send s, late). Late: the frame was
+        # due before the previous one finished, so the engine can't keep its frame rate.
+        self._samples: collections.deque[tuple[float, float, float, bool]] = \
+            collections.deque(maxlen=int(fps * TIMING_WINDOW_S * 2) + 8)
+        self._slow_warned = False
 
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -155,6 +164,45 @@ class Engine:
                 "error": self.error,
             }
 
+    def timing(self) -> dict[str, Any]:
+        """How the last couple of seconds went: frames per second actually sent, the
+        time to render a frame and to send it (median and worst, ms), and how many
+        frames were late. ``slow`` is True when the frame rate falls short."""
+        now = time.perf_counter()
+        recent = [s for s in list(self._samples) if s[0] >= now - TIMING_WINDOW_S]
+        if not self.running or len(recent) < 2:
+            return {"fps_target": self.fps, "fps": None, "render_ms": None, "send_ms": None,
+                    "late": 0, "slow": False}
+        span = max(recent[-1][0] - recent[0][0], 1e-6)
+        fps = (len(recent) - 1) / span
+
+        def ms(values: list[float]) -> dict[str, float]:
+            v = sorted(values)
+            return {"median": round(v[len(v) // 2] * 1000, 2), "max": round(v[-1] * 1000, 2)}
+
+        return {
+            "fps_target": self.fps,
+            "fps": round(fps, 1),
+            "render_ms": ms([s[1] for s in recent]),
+            "send_ms": ms([s[2] for s in recent]),
+            "late": sum(s[3] for s in recent),
+            "slow": span >= TIMING_WINDOW_S * 0.75 and fps < SLOW * self.fps,
+        }
+
+    def _check_pace(self) -> None:
+        """Log once when the frame rate falls short, and say why."""
+        t = self.timing()
+        if t["slow"] and not self._slow_warned:
+            self._slow_warned = True
+            r, s, budget = t["render_ms"]["median"], t["send_ms"]["median"], 1000 / self.fps
+            why = ("rendering" if r > s else "sending") if r + s > 0.8 * budget else \
+                "the computer (frames start late: is it busy?)"
+            log.warning("effects run at %.1f of %g fps: render %.1f ms, send %.1f ms, "
+                        "budget %.1f ms a frame; the bottleneck is %s",
+                        t["fps"], self.fps, r, s, budget, why)
+        elif not t["slow"] and t["fps"] is not None and t["fps"] >= self.fps * 0.97:
+            self._slow_warned = False
+
     # -- render loop (engine thread) --------------------------------------------------
 
     def render_frame(self, now: float) -> np.ndarray | None:
@@ -185,15 +233,22 @@ class Engine:
             return
         period = 1.0 / self.fps
         deadline = time.perf_counter()
+        self._samples.clear()
         try:
             while not stop.is_set():
-                frame = self.render_frame(time.perf_counter())
+                t0 = time.perf_counter()
+                frame = self.render_frame(t0)
                 if frame is None:
                     break
+                t1 = time.perf_counter()
                 output.show(frame)
+                t2 = time.perf_counter()
                 self.frames += 1
                 deadline += period
-                delay = deadline - time.perf_counter()
+                delay = deadline - t2
+                self._samples.append((t0, t1 - t0, t2 - t1, delay <= 0))
+                if self.frames % int(max(self.fps, 1)) == 0:  # about once a second
+                    self._check_pace()
                 if delay > 0:
                     stop.wait(delay)
                 else:

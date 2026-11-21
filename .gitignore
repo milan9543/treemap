@@ -19,3 +19,9 @@ treemap/sim/viewer_dist/
 
 # phase 1 spike: reports and sample frames from the phone
 spikes/phase1/out/
+
+# wrangler (Cloudflare Pages deploys) cache
+.wrangler/
+
+# your own settings (see config.yaml)
+config.local.yaml

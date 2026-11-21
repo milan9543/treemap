@@ -46,13 +46,26 @@ class State:
     _config: Config | None = None
 
     @property
-    def config(self) -> Config:
+    def raw_config(self) -> Config:
+        """The config as loaded, without reading LED counts from the WLED controllers."""
         if self._config is None:
             try:
                 self._config = load_config(self.config_path)
             except ConfigError as e:
                 fail(f"Config error: {e}", code=2)
         return self._config
+
+    @property
+    def config(self) -> Config:
+        """The config, with every controller's LED count known (read from WLED where the
+        config leaves it out)."""
+        cfg = self.raw_config
+        if cfg.output == "wled":
+            try:
+                cfg.controller_layout()
+            except ConfigError as e:
+                fail(f"Config error: {e}", code=2)
+        return cfg
 
 
 def fail(message: str, code: int = 1) -> None:
@@ -101,13 +114,16 @@ def main(
 @config_app.command("show")
 def config_show(ctx: typer.Context) -> None:
     """Validate the config and print the effective values (file merged with defaults)."""
-    cfg = ctx.obj.config
+    cfg = ctx.obj.raw_config  # still shown when a controller doesn't answer
     source = cfg.source if cfg.source else "built-in defaults (no config.yaml found)"
     typer.secho(f"# source: {source}", fg=typer.colors.BRIGHT_BLACK)
     origin = "the controllers" if cfg.output == "wled" else (
         f"the simulated tree, {cfg.sim_tree_path}" if cfg.sim_tree_path.exists()
         else "sim.strips (no simulated tree yet)")
-    typer.secho(f"# LEDs: {cfg.led_count}, from {origin}", fg=typer.colors.BRIGHT_BLACK)
+    try:
+        typer.secho(f"# LEDs: {cfg.led_count}, from {origin}", fg=typer.colors.BRIGHT_BLACK)
+    except ConfigError as e:
+        typer.secho(f"# LEDs: unknown: {e}", fg=typer.colors.YELLOW)
     typer.echo(yaml.safe_dump(cfg.to_dict(), sort_keys=False).rstrip())
 
 
@@ -214,6 +230,9 @@ def sim_view(
     ctx: typer.Context,
     browser: Annotated[bool, typer.Option(help="Open the viewer in a browser.")] = True,
     port: Annotated[int | None, typer.Option(help="Port. Default: sim.port.")] = None,
+    serve: Annotated[bool, typer.Option(
+        "--serve", help="Have the virtual phone film for `treemap serve --sim` too, so a "
+        "scan started through its API sees the simulated tree.")] = False,
 ) -> None:
     """Serve the 3D viewer. Leave it running; other commands stream colours to it."""
     from treemap.sim.server import SimServer
@@ -244,9 +263,12 @@ def sim_view(
     )
 
     def ready(s: SimServer) -> None:
-        typer.secho(f"Viewer running at {s.url}  (Ctrl-C to stop)", fg=typer.colors.GREEN)
+        url = s.url
+        if serve:
+            url += f"?serve=http://127.0.0.1:{_sim_serve_port(cfg)}"
+        typer.secho(f"Viewer running at {url}  (Ctrl-C to stop)", fg=typer.colors.GREEN)
         if browser:
-            webbrowser.open(s.url)
+            webbrowser.open(url)
 
     try:
         asyncio.run(server.serve(on_ready=ready))
@@ -408,14 +430,108 @@ def run_effect(
                f"{f' for {seconds:g} s' if seconds else ' (Ctrl-C to stop)'}")
     try:
         end = None if seconds is None else time.monotonic() + seconds
+        shown = time.monotonic()
         while engine.running and (end is None or time.monotonic() < end):
             engine.wait(0.1)
+            if time.monotonic() - shown >= 2:
+                shown = time.monotonic()
+                typer.echo(f"\r{_timing_line(engine.timing())}   ", nl=False)
     except KeyboardInterrupt:
         typer.echo("\nstopped")
     finally:
+        typer.echo()
         engine.stop()
     if engine.error:
         fail(engine.error)
+
+
+def _timing_line(t: dict) -> str:
+    """The engine's timing in one line: frame rate, render and send times, late frames."""
+    if t["fps"] is None:
+        return "starting…"
+    line = (f"{t['fps']:.1f}/{t['fps_target']:g} fps, render {t['render_ms']['median']:.1f} ms "
+            f"(max {t['render_ms']['max']:.1f}), send {t['send_ms']['median']:.1f} ms "
+            f"(max {t['send_ms']['max']:.1f}), {t['late']} late")
+    return typer.style(line + " SLOW", fg=typer.colors.YELLOW) if t["slow"] else line
+
+
+# -- server ---------------------------------------------------------------------------
+
+
+def _sim_serve_port(cfg: Config) -> int:
+    """`treemap serve --sim`'s port: server.port, unless the viewer has it."""
+    return cfg.server.port if cfg.server.port != cfg.sim.port else cfg.sim.port + 1
+
+
+@app.command("serve")
+def serve(
+    ctx: typer.Context,
+    port: Annotated[int | None, typer.Option(help="Port. Default: server.port.")] = None,
+    host: Annotated[str | None, typer.Option(
+        help="Address to listen on. Default: server.host (every interface).")] = None,
+    sim: Annotated[bool, typer.Option(
+        "--sim", help="Drive the simulated tree in the viewer instead of the configured "
+        "LEDs, for development. Open the viewer with `treemap sim view --serve` to scan "
+        "it through the API.")] = False,
+) -> None:
+    """Serve the API the phone's scan page uses, on the local network.
+
+    The LEDs, the scan and the effects all run here; the page on the phone drives them.
+    Leave it running.
+    """
+    import copy
+    import signal
+    import time
+
+    from treemap.api import Api, HttpServer, lan_address
+    from treemap.outputs import OutputError, create_output
+
+    if sim:
+        cfg = copy.copy(ctx.obj.raw_config)  # the controllers aren't needed
+        cfg.output, cfg.shape = "sim", "tree"  # the simulator only grows trees
+        # the viewer's page may use the API: its virtual phone uploads the frames
+        viewer = f"http://{cfg.sim.host}:{cfg.sim.port}"
+        cfg.server = copy.copy(cfg.server)
+        cfg.server.origins = [*cfg.server.origins, viewer, viewer.replace("127.0.0.1", "localhost")]
+        port = port or _sim_serve_port(cfg)
+    else:
+        cfg = ctx.obj.config
+        port = port or cfg.server.port
+    host = host or cfg.server.host
+    if cfg.output == "sim" and port == cfg.sim.port:
+        fail(f"the simulator's viewer uses port {port}; serve on another one "
+             f"(--port {port + 1}, or server.port in the config)", code=2)
+    try:
+        output = create_output(cfg, source="treemap serve", mirror=False)
+    except OutputError as e:
+        fail(str(e))
+    api = Api(cfg, output)
+    try:
+        server = HttpServer(api.router, host, port, cfg.server.origins).start()
+    except OSError as e:
+        api.close()
+        fail(f"Can't listen on {host}:{port}: {e.strerror or e}")
+    where = "127.0.0.1" if host in ("127.0.0.1", "localhost") else lan_address()
+    base = f"http://{where}:{server.port}"
+    typer.secho(f"treemap serve on {base}  (Ctrl-C to stop)", fg=typer.colors.GREEN)
+    typer.echo(f"  {api.n} LEDs on {_output_label(cfg)}; API at {base}/api/v1/info")
+    typer.echo(f"  pages allowed to use it: {', '.join(cfg.server.origins) or 'none'}")
+    if sim:
+        typer.echo("  to scan the simulated tree through the API: `treemap sim view --serve`, "
+                   "walk round it (f), then POST /api/v1/scan/start")
+
+    def terminate(signum, frame) -> None:  # e.g. `docker stop`: shut down as for Ctrl-C
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        typer.echo("\nstopping")
+    finally:
+        server.stop()
+        api.close()
 
 
 # -- scan -----------------------------------------------------------------------------
@@ -843,19 +959,22 @@ def camera_check(
 def wled_check(ctx: typer.Context) -> None:
     """Ask each controller in the config whether its WLED settings fit."""
     from treemap.outputs import OutputError
-    from treemap.outputs.wled import check_problems, fetch_state
+    from treemap.outputs.wled import check_problems, fetch_cfg, fetch_state
 
-    cfg = ctx.obj.config
+    cfg = ctx.obj.raw_config  # a controller that doesn't answer is reported, not fatal
     unreachable = 0
     for i, c in enumerate(cfg.controllers):
-        span = f"LEDs {c.start}-{c.start + c.count - 1}{', reversed' if c.reverse else ''}"
-        typer.secho(f"controllers[{i}] {c.host} ({span})", bold=True)
+        start = "after the previous one" if c.start is None else f"from {c.start}"
+        count = "count from WLED" if c.count is None else f"{c.count} LEDs"
+        typer.secho(f"controllers[{i}] {c.host} ({count}, {start}"
+                    f"{', reversed' if c.reverse else ''})", bold=True)
         try:
             data = fetch_state(c.host)
         except OutputError as e:
             typer.secho(f"  {e}", fg=typer.colors.RED)
             unreachable += 1
             continue
+        data["cfg"] = fetch_cfg(c.host)
         info, state = data["info"], data.get("state", {})
         typer.echo(f"  {info.get('name', 'WLED')} {info.get('ver', '')} at "
                    f"{info.get('ip', c.host)}: {info.get('leds', {}).get('count', '?')} LEDs, "
@@ -865,6 +984,14 @@ def wled_check(ctx: typer.Context) -> None:
             typer.secho(f"  warning: {p}", fg=typer.colors.YELLOW)
         if not problems:
             typer.secho("  ok", fg=typer.colors.GREEN)
+    if not unreachable:
+        try:
+            layout = cfg.controller_layout()
+        except ConfigError as e:
+            typer.secho(f"\n{e}", fg=typer.colors.RED)
+            raise typer.Exit(1) from None
+        typer.echo("\n" + "; ".join(
+            f"{c.host}: LEDs {c.start}-{c.start + c.count - 1}" for c in layout))
     if cfg.output != "wled":
         typer.echo("\nSet `output: wled` in the config to send colours to the controllers.")
     if unreachable:

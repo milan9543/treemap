@@ -59,5 +59,6 @@ def test_check_flags_led_count_and_dimmed_brightness():
     good = {"info": {"leds": {"count": 200}}, "state": {"bri": 255}}
     assert check_problems(c, good) == []
     bad = {"info": {"leds": {"count": 150}}, "state": {"bri": 128}}
-    problems = check_problems(c, bad)
+    problems = check_problems(c, {**bad, "cfg": {"wifi": {"sleep": True}}})
     assert "set up for 150 LEDs" in problems[0] and "128/255" in problems[1]
+    assert "Disable WiFi sleep" in problems[2]
