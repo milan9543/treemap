@@ -151,6 +151,16 @@ class Config:
         return self.resolve(Path("data") / "scans" / self.scan.profile)
 
     @property
+    def colours_path(self) -> Path:
+        """The camera's measured colours, written by ``treemap camera check``."""
+        return self.resolve(Path("data") / "camera_colours.json")
+
+    @property
+    def camera_id(self) -> str:
+        """Which camera measured colours belong to."""
+        return self.camera.type if self.camera.type == "sim" else f"{self.camera.type} {self.camera.url}"
+
+    @property
     def map_path(self) -> Path:
         """The reconstructed map written by ``treemap reconstruct``."""
         return self.resolve(Path("data") / "tree_map.json")

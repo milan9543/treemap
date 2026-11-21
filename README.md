@@ -16,9 +16,9 @@ tree grows like a fir (whorls of drooping branches covered in needles, the light
 onto them), and its LEDs light up the branches and the floor round them, in the 3D view
 and, more faintly, in the phone's photos.
 
-> **Status:** the simulator, scanning, mapping checks, the effects engine and the WLED
-> output (`output: wled`) work. The Android camera (`camera: android`) isn't built yet,
-> so scanning still needs the simulator; see [ROADMAP.md](ROADMAP.md).
+> **Status:** the simulator, scanning, mapping checks, the effects engine, the WLED
+> output (`output: wled`) and the Android camera (`camera: android`) work. Scanning the
+> real LEDs hasn't been tried end to end yet; see [ROADMAP.md](ROADMAP.md).
 
 ## Install
 
@@ -116,6 +116,7 @@ Keep `treemap sim view` running in one terminal to watch; run these in another.
 | Run an effect | `treemap run rainbow -p speed=0.5 --seconds 30` |
 | Run a 3D effect on the true positions | `treemap run plane -p direction=around --map truth` |
 | Check the WLED controllers' settings | `treemap wled check` |
+| Check the camera can scan (and measure its colours) | `treemap camera check [--brightness 100]` |
 | Show the config | `treemap config show` |
 
 `treemap scan` needs the viewer open, because the viewer's virtual phone films the
@@ -149,7 +150,7 @@ change:
 |---|---|
 | `output` | `sim` (the browser viewer) or `wled` (the controllers, see [Real LEDs](#real-leds-wled)). |
 | `controllers` | WLED controllers, each owning a slice of the LED indices; `reverse: true` for a strip wired from the other end. |
-| `camera.type`, `camera.url` | `sim` (the viewer's virtual phone), or `android` with the IP Webcam URL (not built yet). |
+| `camera.type`, `camera.url` | `sim` (the viewer's virtual phone), or `android` with the IP Webcam URL (see [Real camera](#real-camera-an-android-phone)). |
 | `camera.fov_deg` | The phone camera's horizontal field of view; a starting guess the solve refines. |
 | `scan.round_s`, `scan.status_s` | Seconds of flashing per round, and of status colours between rounds. |
 | `scan.max_rounds` | Stop after this many rounds (the scan also stops once every LED is ok). |
@@ -169,6 +170,8 @@ change:
 | `data/sim_tree.json` | The simulated tree: true LED positions, how it was wired, and its branches. |
 | `data/scans/<profile>/round_XX.npz` | One scan round: which LED was at which pixel in each photo. |
 | `data/scans/<profile>/overrides.json` | LEDs you asked to interpolate. |
+| `data/camera_colours.json` | How the camera sees each colour of the code, from `treemap camera check`. |
+| `data/camera_check/*.jpg` | One frame of each colour from the last `treemap camera check`. |
 | `data/tree_map.json` | The result: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. |
 
 ## Real LEDs: WLED
@@ -204,14 +207,46 @@ WLED shows treemap's colours while they keep arriving and goes back to its own e
 few seconds after they stop. If WLED's settings show "Receive UDP realtime" switched
 off (Sync Interfaces), switch it on. `engine.gamma` defaults to 2.2 on WLED.
 
-## Scanning the real tree (once the hardware is supported)
+## Real camera: an Android phone
 
-The scan works the same way; only the output and camera change (`output: wled`,
-`camera: android`, with IP Webcam streaming from the phone). Things that matter for a
-good result:
+The scan films through the [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam)
+app: start its server, and use the address it shows at the bottom of the screen.
 
-- A dark room, and the phone's exposure and white balance locked in IP Webcam, so the
-  red, green and blue of the code stay apart. If colours are misread, lower
+```yaml
+camera:
+  type: android
+  url: http://192.168.1.60:8080
+```
+
+640x480 at 30 frames/s is plenty (IP Webcam's Video preferences). Then, in a dark room,
+with the phone pointed at the LEDs:
+
+```sh
+treemap camera check
+```
+
+The LEDs turn white while the phone's exposure and white balance adjust, then they're
+locked (on phones where IP Webcam uses manual sensor mode: manual sensor on, white
+balance "daylight"). Then the LEDs show red, green, blue and white in turn, and the check
+reports the frame rate and how many LEDs it saw and read right in each colour.
+
+It also **measures how this phone sees each colour** and saves it in
+`data/camera_colours.json`; the scan reads colours by it. A phone films small LEDs with
+washed-out colours (a green LED arrives as something like (83, 125, 95)), which fixed
+thresholds would read as white, so run the check before scanning, and again after
+changing the phone, its video settings or `scan.brightness`. LEDs that face the phone
+clip to white in the middle; their colour is read from the glow round them. It prints
+"the camera is ready to scan" when every colour reads right at least 85% of the time;
+the code's check digit and the votes over several cycles handle the rest.
+
+A scan locks the exposure and white balance itself if they aren't already.
+
+## Scanning the real tree
+
+The scan works the same way as in the simulator; only the output and camera change
+(`output: wled`, `camera: android`). Things that matter for a good result:
+
+- A dark room, and `treemap camera check` passing. If colours are misread, lower
   `scan.brightness` or raise `scan.symbol_ms`.
 - **Walk round the tree**, keeping it roughly in frame. Turning on the spot gives the
   solve nothing to work with. Hold the phone roughly level: the solve takes "up" from
@@ -260,7 +295,7 @@ workflow step.
 
 | Module | Contents |
 |---|---|
-| `cameras/` | The camera interface and the viewer's virtual phone. |
+| `cameras/` | The camera interface, the viewer's virtual phone, the Android phone (IP Webcam) and the camera check. |
 | `outputs/` | The LED output interface, the viewer output and the WLED (DDP) output. |
 | `scan/` | The LED code, blob tracking and decoding, structure from motion, scan rounds, cleanup and evaluation. |
 | `mapping/` | The tree map file and the quality views. |

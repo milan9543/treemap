@@ -108,7 +108,7 @@ treemap/
 
 ### Phase B: real hardware (once WLED and the LEDs arrive)
 
-#### Batch 9: Android camera
+#### Batch 9: Android camera — done
 - **`AndroidCamera`** reads the "IP Webcam" Android app's MJPEG stream (`{url}/video`) into the `Camera.read()` stream, timestamping frames on arrival. The scan decodes from colour changes, not timing, so stream lag doesn't matter.
   - It tries to lock exposure, white balance and focus through the app's endpoints, and otherwise asks you to set them by hand.
   - `show_detections` could later draw the scan's detections on the phone.

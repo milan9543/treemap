@@ -30,6 +30,8 @@ test_app = typer.Typer(
     help="Test patterns for checking wiring and index order.", no_args_is_help=True
 )
 wled_app = typer.Typer(help="WLED controllers.", no_args_is_help=True)
+camera_app = typer.Typer(help="The scan camera.", no_args_is_help=True)
+app.add_typer(camera_app, name="camera")
 app.add_typer(config_app, name="config")
 app.add_typer(sim_app, name="sim")
 app.add_typer(test_app, name="test")
@@ -453,7 +455,7 @@ def scan(
     with _output(ctx) as out:
         try:
             tree_map = workflow.run_scan(cfg, out, fresh=fresh, rounds=rounds,
-                                         on_update=_scan_progress)
+                                         on_update=_scan_progress, on_message=typer.echo)
         except workflow.WorkflowError as e:
             typer.echo()
             fail(str(e))
@@ -760,6 +762,80 @@ def test_off(ctx: typer.Context) -> None:
     with _output(ctx):
         pass
     typer.echo("off")
+
+
+# -- camera ---------------------------------------------------------------------------
+
+
+@camera_app.command("check")
+def camera_check(
+    ctx: typer.Context,
+    brightness: Annotated[
+        int | None, typer.Option(min=1, max=255, help="LED brightness to try, 0-255. "
+                                 "Default: scan.brightness.", show_default=False)
+    ] = None,
+) -> None:
+    """Check the camera can scan: its frame rate, and whether it reads the LEDs' colours.
+
+    Point the phone at the LEDs first. The LEDs turn white while the camera's exposure
+    and white balance adjust (then they're locked), then show red, green, blue and white
+    in turn. One frame of each is saved in data/camera_check/.
+    """
+    import cv2
+
+    from treemap.cameras import CameraError, create_camera
+    from treemap.cameras.check import advice, colour_check, measure_fps, settle_and_lock
+
+    cfg = ctx.obj.config
+    brightness = brightness or cfg.scan.brightness
+    try:
+        camera = create_camera(cfg)
+    except CameraError as e:
+        fail(str(e))
+    with camera, _output(ctx) as out:
+        where = cfg.camera.url if cfg.camera.type == "android" else "the viewer's phone"
+        typer.echo(f"camera: {cfg.camera.type} ({where})")
+        settings = camera.settings() if hasattr(camera, "settings") else None
+        if settings:
+            typer.echo("  " + ", ".join(f"{k} {settings[k]}" for k in (
+                "video_size", "quality", "exposure_lock", "whitebalance_lock", "manual_sensor",
+                "exposure_ns", "iso", "whitebalance", "focusmode") if k in settings))
+        if settings is not None:
+            typer.echo("adjusting exposure and white balance to the LEDs in white…")
+            locked = settle_and_lock(camera, out, brightness)
+            typer.secho("  locked" if locked else
+                        "  couldn't lock them; lock exposure and white balance in IP Webcam",
+                        fg=typer.colors.GREEN if locked else typer.colors.YELLOW)
+        typer.echo("measuring the frame rate…")
+        fps, size = measure_fps(camera)
+        if size is None:
+            fail("no frames arrived from the camera")
+        typer.echo(f"  {fps:.1f} frames/s at {size[0]}x{size[1]}")
+        typer.echo(f"showing each colour at scan.brightness {brightness}…")
+        results, model = colour_check(camera, out, brightness)
+
+    folder = cfg.resolve("data/camera_check")
+    folder.mkdir(parents=True, exist_ok=True)
+    for r in results:
+        share = f"{r.share:.0%} read right" if r.share == r.share else "-"
+        misread = f", else {r.misread_as}" if r.misread_as and r.share < 1 else ""
+        typer.echo(f"  {r.name:<6} {r.blobs:>4} LEDs seen, {share}{misread}")
+        if r.sample is not None:
+            cv2.imwrite(str(folder / f"{r.name}.jpg"), r.sample)
+    typer.secho(f"sample frames in {folder}", fg=typer.colors.BRIGHT_BLACK)
+    if model is not None:
+        model.meta.update(camera=cfg.camera_id, video_size=list(size))
+        model.save(cfg.colours_path)
+        typer.echo(f"saved how this camera sees the colours in {cfg.colours_path}; the scan "
+                   "reads colours by it")
+    else:
+        typer.secho("the colours couldn't be measured, so nothing was saved",
+                    fg=typer.colors.YELLOW)
+    tips = advice(fps, size, results, model, brightness)
+    for tip in tips:
+        typer.secho(f"warning: {tip}", fg=typer.colors.YELLOW)
+    if not tips:
+        typer.secho("the camera is ready to scan", fg=typer.colors.GREEN)
 
 
 # -- WLED -----------------------------------------------------------------------------

@@ -14,6 +14,7 @@ colour code (:mod:`treemap.scan.code`) each one spells to learn which LED it is.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
@@ -27,6 +28,8 @@ WHITE_RATIO = 0.55  # weakest/strongest channel above this: white
 MAX_MISSES = 3  # frames a track survives without a matching blob
 SYNC_SHARE = 0.5  # share of white blobs that makes a frame a sync frame
 SLOT_WINDOW = 0.3  # use frames within ±this many symbols of a slot's centre
+COLOUR_RADIUS = 3  # px round a blob's centre its colour is read from
+CLIP = 240  # a pixel with a channel this bright is clipped: its colour is unreliable
 
 
 @dataclass
@@ -52,10 +55,16 @@ def classify(rgb: np.ndarray) -> np.ndarray:
     return sym
 
 
-def find_blobs(img_bgr: np.ndarray, min_level: float = MIN_LEVEL, radius: int = 2) -> Blobs:
+Classifier = Callable[[np.ndarray], np.ndarray]  # (K, 3) RGB -> (K,) symbol or -1
+
+
+def find_blobs(img_bgr: np.ndarray, min_level: float = MIN_LEVEL, radius: int = 2,
+               classify_rgb: Classifier = classify) -> Blobs:
     """Local brightness peaks: LEDs close together in the picture glow into each other,
     so they're separated by their peaks, not by dark gaps between them. Each peak's
-    position and colour come from the ``(2·radius+1)²`` pixels round it."""
+    position comes from the ``(2·radius+1)²`` pixels round it, its colour from a
+    slightly wider window (see :func:`_colours`). Colours are read by ``classify_rgb``: by default fixed thresholds, or a camera's measured
+    colours (:class:`treemap.scan.colours.ColourModel`)."""
     img = img_bgr.astype(np.float32)
     g = cv2.GaussianBlur(img.max(axis=2), (0, 0), 1.0)
     sample = g[::4, ::4]
@@ -76,9 +85,30 @@ def find_blobs(img_bgr: np.ndarray, min_level: float = MIN_LEVEL, radius: int = 
     tot = wts.sum(axis=(1, 2))
     u = (wts * xx).sum(axis=(1, 2)) / tot
     v = (wts * yy).sum(axis=(1, 2)) / tot
-    rgb = (wts[..., None] * img[yy, xx][..., ::-1]).sum(axis=(1, 2)) / tot[:, None]
     area = (wts > 0).sum(axis=(1, 2))
-    return Blobs(np.stack([u, v], axis=1), rgb, classify(rgb), area)
+    rgb = _colours(img, cent[1:], thresh)
+    return Blobs(np.stack([u, v], axis=1), rgb, classify_rgb(rgb), area)
+
+
+def _colours(img: np.ndarray, centres: np.ndarray, thresh: float) -> np.ndarray:
+    """Each blob's RGB colour, from the ``(2·COLOUR_RADIUS+1)²`` pixels round its centre.
+
+    A camera clips the core of an LED it faces to white, while the glow round it keeps
+    the colour, so clipped pixels (any channel at CLIP or above) are left out unless a
+    blob has nothing else."""
+    h, w = img.shape[:2]
+    r = COLOUR_RADIUS
+    px = np.clip(np.round(centres).astype(int), r, [w - 1 - r, h - 1 - r])
+    d = np.arange(-r, r + 1)
+    win = img[px[:, 1, None, None] + d[None, :, None],
+              px[:, 0, None, None] + d[None, None, :]]  # (K, win, win, 3) BGR
+    level = win.max(axis=3)
+    wts = np.maximum(level - thresh, 0.0)
+    clean = wts * (level < CLIP)
+    use_clean = clean.sum(axis=(1, 2)) > 0
+    wts = np.where(use_clean[:, None, None], clean, wts)
+    tot = np.maximum(wts.sum(axis=(1, 2)), 1e-6)
+    return (wts[..., None] * win[..., ::-1]).sum(axis=(1, 2)) / tot[:, None]
 
 
 @dataclass
@@ -97,7 +127,8 @@ class Track:
 class Tracker:
     """Feed frames in order with :meth:`add`; read the tracks afterwards."""
 
-    def __init__(self) -> None:
+    def __init__(self, classify_rgb: Classifier = classify) -> None:
+        self.classify_rgb = classify_rgb
         self.times: list[float] = []  # per frame, camera clock (s)
         self.white: list[float] = []  # per frame: share of white blobs (NaN if too few)
         self.tracks: list[Track] = []
@@ -113,7 +144,7 @@ class Tracker:
     def add(self, t: float, img_bgr: np.ndarray, blobs: Blobs | None = None) -> Blobs:
         h, w = img_bgr.shape[:2]
         self.size = (w, h)
-        blobs = find_blobs(img_bgr) if blobs is None else blobs
+        blobs = find_blobs(img_bgr, classify_rgb=self.classify_rgb) if blobs is None else blobs
         k = len(self.times)
         self.times.append(float(t))
         known = blobs.sym >= 0

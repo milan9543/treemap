@@ -10,6 +10,8 @@ build/
 # generated data: raw scans and simulator ground truth (tree_map.json stays trackable)
 data/scans/
 data/sim_tree.json
+data/camera_colours.json
+data/camera_check/
 
 # viewer: npm packages and the built bundle (npm --prefix viewer run build)
 node_modules/

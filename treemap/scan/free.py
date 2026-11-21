@@ -33,6 +33,7 @@ from treemap.outputs.base import LedOutput
 from treemap.scan import sfm
 from treemap.scan.cleanup import cleanup, normalise
 from treemap.scan.code import code_lookup, codewords, frame_at, symbol_index
+from treemap.scan.colours import ColourModel
 from treemap.scan.track import Decoded, Tracker, decode
 
 FRAME_STRIDE = 1_000_000  # frame ids: round * FRAME_STRIDE + frame in round
@@ -164,6 +165,7 @@ class ScanSettings:
     status_s: float = 4.0
     max_rounds: int = 10
     fov_deg: float = 65.0
+    colours: ColourModel | None = None  # the camera's measured colours; None: thresholds
 
 
 def detections(tracker: Tracker, decoded: Decoded | None) -> dict:
@@ -204,7 +206,7 @@ def scan(
     for k in range(len(saved), len(saved) + (rounds or s.max_rounds)):
         base = {"round": k + 1, "rounds_saved": len(saved)}
         # 1. flashing
-        tracker = Tracker()
+        tracker = Tracker(s.colours.classify) if s.colours is not None else Tracker()
         decoded: Decoded | None = None
         meta: dict = {}
         camera.drain()

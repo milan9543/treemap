@@ -26,7 +26,12 @@ def create_camera(cfg: Config, sim_port: int | None = None) -> Camera:
         except CameraUnavailable as e:
             raise CameraError(str(e)) from None
     if cfg.camera.type == "android":
-        raise NotImplementedError("the Android camera isn't built yet; use `camera: sim`")
+        from treemap.cameras.android import AndroidCamera, CameraUnavailable
+
+        try:
+            return AndroidCamera(cfg.camera.url)
+        except CameraUnavailable as e:
+            raise CameraError(str(e)) from None
     raise ValueError(f"unknown camera {cfg.camera.type!r}")
 
 

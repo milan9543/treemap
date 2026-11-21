@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from treemap.mapping.model import TreeMap
     from treemap.outputs.base import LedOutput
     from treemap.scan.evaluate import Evaluation
+    from treemap.scan.colours import ColourModel
     from treemap.scan.free import ScanSettings
     from treemap.scan.sfm import SfmResult
 
@@ -42,7 +43,33 @@ def ensure_sim_tree(cfg: Config) -> bool:
     return True
 
 
-def scan_settings(cfg: Config) -> ScanSettings:
+def camera_colours(cfg: Config) -> tuple[ColourModel | None, str | None]:
+    """The configured camera's measured colours (from ``treemap camera check``), and if
+    there aren't any usable, why: ``(None, message)``. The sim camera's colours are pure
+    enough not to need them."""
+    from treemap.scan.colours import ColourError, ColourModel
+
+    path = cfg.colours_path
+    if not path.exists():
+        return None, (None if cfg.camera.type == "sim" else
+                      "this camera's colours haven't been measured: run `treemap camera "
+                      "check` first, or colours may be misread")
+    try:
+        model = ColourModel.load(path)
+    except ColourError as e:
+        return None, f"ignoring the measured colours: {e}"
+    if model.meta.get("camera") != cfg.camera_id:
+        return None, (f"the measured colours are for another camera "
+                      f"({model.meta.get('camera')}); run `treemap camera check` again")
+    measured_at = model.meta.get("brightness")
+    if measured_at not in (None, cfg.scan.brightness):
+        return model, (f"the colours were measured at brightness {measured_at}, the scan "
+                       f"flashes at {cfg.scan.brightness}; if colours misread, run "
+                       "`treemap camera check` again")
+    return model, None
+
+
+def scan_settings(cfg: Config, colours: ColourModel | None = None) -> ScanSettings:
     from treemap.scan.free import ScanSettings
 
     s = cfg.scan
@@ -50,6 +77,7 @@ def scan_settings(cfg: Config) -> ScanSettings:
         led_count=cfg.led_count, scan_dir=cfg.scan_dir, map_path=cfg.map_path,
         symbol_s=s.symbol_ms / 1000, brightness=s.brightness, round_s=s.round_s,
         status_s=s.status_s, max_rounds=s.max_rounds, fov_deg=cfg.camera.fov_deg,
+        colours=colours,
     )
 
 
@@ -62,22 +90,33 @@ def run_scan(
     sim_port: int | None = None,
     on_update: Callable[[dict], None] = lambda u: None,
     check_cancel: Callable[[], None] = lambda: None,
+    on_message: Callable[[str], None] = lambda m: None,
 ) -> TreeMap | None:
     """Scan in rounds (see :mod:`treemap.scan.free`) with the configured camera.
 
-    Interrupting (any exception from a callback) keeps the rounds finished so far.
+    A camera that can lock its exposure and white balance (the Android one) gets them
+    locked on the LEDs first, unless they already are. Interrupting (any exception from
+    a callback) keeps the rounds finished so far.
     """
     from treemap.cameras import CameraError, create_camera
     from treemap.cameras.browser import CameraUnavailable
+    from treemap.cameras.check import settle_and_lock
     from treemap.scan.free import ScanError, scan
 
     try:
         camera = create_camera(cfg, sim_port)
     except (CameraError, NotImplementedError) as e:
         raise WorkflowError(str(e)) from None
+    colours, problem = camera_colours(cfg)
+    if problem:
+        on_message(problem)
     with camera:
+        if hasattr(camera, "locked") and not camera.locked():
+            on_message("locking the camera's exposure and white balance on the LEDs…")
+            if not settle_and_lock(camera, output, cfg.scan.brightness):
+                on_message("couldn't lock them; lock exposure and white balance in IP Webcam")
         try:
-            return scan(output, camera, scan_settings(cfg), fresh=fresh, rounds=rounds,
+            return scan(output, camera, scan_settings(cfg, colours), fresh=fresh, rounds=rounds,
                         on_update=on_update, check_cancel=check_cancel)
         except (ScanError, CameraUnavailable) as e:
             raise WorkflowError(str(e)) from None
