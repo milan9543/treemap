@@ -36,9 +36,10 @@ class SimOutput(LedOutput):
 
     def __init__(
         self, led_count: int, host: str = "127.0.0.1", port: int = 8765, retry_s: float = 2.0,
-        source: str | None = None,
+        source: str | None = None, quiet: bool = False,
     ) -> None:
         super().__init__(led_count)
+        self.quiet = quiet  # don't warn when the viewer isn't running (it's optional)
         # Shown in the viewer when several programs send frames at once.
         self.source = source or default_source()
         self.url = f"ws://{host}:{port}{OUTPUT_PATH}?source={quote(self.source)}"
@@ -76,7 +77,7 @@ class SimOutput(LedOutput):
             self._stack = stack
         except (OSError, TimeoutError, InvalidHandshake, InvalidURI) as e:
             self._next_attempt = now + self.retry_s
-            if not self._warned:
+            if not self._warned and not self.quiet:
                 log.warning(
                     "sim viewer not reachable at %s (%s); start it with `treemap sim view`",
                     self.url,

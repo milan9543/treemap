@@ -88,8 +88,9 @@ export function startJob(kind: string, params: Record<string, unknown> = {}): vo
 
 export const cancelJob = () => ws.send({ type: "job.cancel" });
 
-export function startScan(fresh: boolean): void {
-  startJob("scan", { fresh });
+/** Scans start over: the server forgets earlier rounds. */
+export function startScan(): void {
+  startJob("scan");
   if (app.sim) controls.setWalking(true);
 }
 

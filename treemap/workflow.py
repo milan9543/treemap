@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 from treemap.config import Config, parse_leds
 
 if TYPE_CHECKING:
+    from treemap.cameras.base import Camera
     from treemap.mapping.model import TreeMap
     from treemap.outputs.base import LedOutput
     from treemap.scan.evaluate import Evaluation
@@ -77,7 +78,7 @@ def scan_settings(cfg: Config, colours: ColourModel | None = None) -> ScanSettin
         led_count=cfg.led_count, scan_dir=cfg.scan_dir, map_path=cfg.map_path,
         symbol_s=s.symbol_ms / 1000, brightness=s.brightness, round_s=s.round_s,
         status_s=s.status_s, max_rounds=s.max_rounds, fov_deg=cfg.camera.fov_deg,
-        colours=colours,
+        colours=colours, shape=cfg.shape,
     )
 
 
@@ -85,41 +86,98 @@ def run_scan(
     cfg: Config,
     output: LedOutput,
     *,
-    fresh: bool = False,
     rounds: int | None = None,
     sim_port: int | None = None,
     on_update: Callable[[dict], None] = lambda u: None,
     check_cancel: Callable[[], None] = lambda: None,
     on_message: Callable[[str], None] = lambda m: None,
 ) -> TreeMap | None:
-    """Scan in rounds (see :mod:`treemap.scan.free`) with the configured camera.
+    """Scan from scratch, in rounds (see :mod:`treemap.scan.free`), with the configured
+    camera. Earlier rounds are forgotten; the rounds of this scan build on each other.
 
-    A camera that can lock its exposure and white balance (the Android one) gets them
-    locked on the LEDs first, unless they already are. Interrupting (any exception from
-    a callback) keeps the rounds finished so far.
+    First the camera gets ready (:func:`prepare_camera`: a countdown, then the Android
+    camera's exposure and colours). ``on_update`` gets progress dicts, ``round`` 0 while
+    getting ready. Interrupting (any exception from a callback) keeps the rounds
+    finished so far.
     """
     from treemap.cameras import CameraError, create_camera
     from treemap.cameras.browser import CameraUnavailable
-    from treemap.cameras.check import settle_and_lock
     from treemap.scan.free import ScanError, scan
 
     try:
         camera = create_camera(cfg, sim_port)
     except (CameraError, NotImplementedError) as e:
         raise WorkflowError(str(e)) from None
-    colours, problem = camera_colours(cfg)
-    if problem:
-        on_message(problem)
     with camera:
-        if hasattr(camera, "locked") and not camera.locked():
-            on_message("locking the camera's exposure and white balance on the LEDs…")
-            if not settle_and_lock(camera, output, cfg.scan.brightness):
-                on_message("couldn't lock them; lock exposure and white balance in IP Webcam")
         try:
-            return scan(output, camera, scan_settings(cfg, colours), fresh=fresh, rounds=rounds,
+            colours = prepare_camera(cfg, camera, output, on_update, check_cancel, on_message)
+            return scan(output, camera, scan_settings(cfg, colours), fresh=True, rounds=rounds,
                         on_update=on_update, check_cancel=check_cancel)
         except (ScanError, CameraUnavailable) as e:
             raise WorkflowError(str(e)) from None
+
+
+def prepare_camera(
+    cfg: Config,
+    camera: Camera,
+    output: LedOutput,
+    on_update: Callable[[dict], None] = lambda u: None,
+    check_cancel: Callable[[], None] = lambda: None,
+    on_message: Callable[[str], None] = lambda m: None,
+) -> ColourModel | None:
+    """Get the camera ready to scan; returns the colours to read the code by.
+
+    1. **countdown** (``scan.countdown_s``): the LEDs glow dim white, to point the
+       camera at them.
+    2. **exposure**: a camera that can (the Android one) gets its exposure and white
+       balance set for the LEDs (:func:`treemap.cameras.check.fix_exposure`).
+    3. **colours**: how it sees each colour of the code at that exposure is measured
+       and saved, as ``treemap camera check`` does. If too few LEDs were seen, the last
+       measurement is used.
+    """
+    import time
+
+    from treemap.cameras.check import SYNC, colour_check, fix_exposure, solid
+
+    brightness = cfg.scan.brightness
+    glow = solid(output.led_count, SYNC, max(brightness // 4, 8))
+    end = time.monotonic() + cfg.scan.countdown_s
+    while (left := end - time.monotonic()) > 0:
+        check_cancel()
+        output.show(glow)
+        on_update({"round": 0, "phase": "countdown", "remaining": round(left, 1)})
+        time.sleep(min(0.25, left))
+    if not hasattr(camera, "exposure"):  # the sim camera: nothing to set
+        colours, problem = camera_colours(cfg)
+        if problem:
+            on_message(problem)
+        return colours
+
+    on_update({"round": 0, "phase": "exposure"})
+    if (done := fix_exposure(camera, output, brightness)) is not None:
+        on_message(done)
+    check_cancel()
+    on_update({"round": 0, "phase": "colours"})
+    results, model = colour_check(camera, output, brightness)
+    check_cancel()
+    if model is not None and min(r.blobs for r in results) >= 10:
+        save_colours(cfg, model, camera, results)
+        on_message("colours read right: " + ", ".join(f"{r.name} {r.share:.0%}" for r in results))
+        return model
+    on_message("too few LEDs seen to measure the colours; point the camera at the LEDs")
+    colours, problem = camera_colours(cfg)
+    if problem:
+        on_message(problem)
+    return colours
+
+
+def save_colours(cfg: Config, model: ColourModel, camera: Camera, results: list) -> None:
+    """Save measured colours for the configured camera, with the settings they need."""
+    size = next((r.sample.shape[1::-1] for r in results if r.sample is not None), None)
+    model.meta.update(camera=cfg.camera_id, video_size=list(size) if size else None,
+                      camera_settings=camera.exposure()["settings"]
+                      if hasattr(camera, "exposure") else {})
+    model.save(cfg.colours_path)
 
 
 def rebuild_map(cfg: Config) -> tuple[TreeMap, SfmResult]:
@@ -129,7 +187,7 @@ def rebuild_map(cfg: Config) -> tuple[TreeMap, SfmResult]:
 
     try:
         tree_map, res = build_map(load_rounds(cfg.scan_dir), cfg.led_count,
-                                  load_overrides(cfg.scan_dir))
+                                  load_overrides(cfg.scan_dir), cfg.shape)
     except (ScanError, SfmError) as e:
         raise WorkflowError(f"can't reconstruct from {cfg.scan_dir}: {e}") from None
     tree_map.save(cfg.map_path)

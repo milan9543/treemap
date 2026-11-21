@@ -54,6 +54,7 @@ export interface TreeMapData {
   outliers?: number[];
   forced_interpolate?: number[];
   rounds?: number;
+  shape?: "tree" | "flat"; // flat: a 2D map (z = 0) of LEDs laid on the floor or a wall
 }
 
 export interface ServerConfig {
@@ -64,7 +65,7 @@ export interface ServerConfig {
   jobs: boolean;
   config?: {
     camera: { type: string; fov_deg: number };
-    scan: { profile: string; camera_fps: number; round_s: number; status_s: number };
+    scan: { profile: string; camera_fps: number; round_s: number; status_s: number; countdown_s: number };
     [key: string]: unknown;
   };
   config_source?: string | null;
@@ -103,8 +104,9 @@ export type MapChoice = "scanned" | "truth";
 
 export interface ScanProgress {
   round: number;
-  rounds_saved: number;
-  phase: "flashing" | "solving" | "status";
+  rounds_saved?: number;
+  // round 0: getting ready (countdown, then the phone's exposure and colours)
+  phase: "countdown" | "exposure" | "colours" | "flashing" | "solving" | "status";
   remaining?: number;
   frames?: number;
   identified?: number;

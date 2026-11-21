@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ from treemap.cameras.base import Camera
 from treemap.mapping.model import TreeMap
 from treemap.mapping.quality import status_frame
 from treemap.outputs.base import LedOutput
-from treemap.scan import sfm
+from treemap.scan import planar, sfm
 from treemap.scan.cleanup import cleanup, normalise
 from treemap.scan.code import code_lookup, codewords, frame_at, symbol_index
 from treemap.scan.colours import ColourModel
@@ -101,11 +102,13 @@ def save_overrides(scan_dir: Path, interpolate: set[int]) -> None:
 # -- solving ----------------------------------------------------------------------------
 
 
-def build_map(rounds: list[Round], led_count: int,
-              interpolate: set[int] = frozenset()) -> tuple[TreeMap, sfm.SfmResult]:
-    """All rounds' observations -> 3D positions -> cleanup -> normalised :class:`TreeMap`.
+def build_map(rounds: list[Round], led_count: int, interpolate: set[int] = frozenset(),
+              shape: str = "tree") -> tuple[TreeMap, sfm.SfmResult]:
+    """All rounds' observations -> positions -> cleanup -> normalised :class:`TreeMap`.
 
-    LEDs in ``interpolate`` ignore their observations and are filled from neighbours.
+    ``shape`` "tree" solves 3D positions (:mod:`treemap.scan.sfm`), "flat" 2D ones on a
+    plane (:mod:`treemap.scan.planar`). LEDs in ``interpolate`` ignore their observations
+    and are filled from neighbours.
     Raises :class:`sfm.SfmError` if there isn't enough to solve.
     """
     rounds = [r for r in rounds if len(r.frame)]
@@ -114,7 +117,7 @@ def build_map(rounds: list[Round], led_count: int,
     sizes = {r.size for r in rounds}
     if len(sizes) > 1:
         raise ScanError(f"the rounds were filmed at different sizes {sorted(sizes)}; "
-                        "scan again with --fresh")
+                        "scan again")
     frame = np.concatenate([k * FRAME_STRIDE + r.frame for k, r in enumerate(rounds)])
     led = np.concatenate([r.led for r in rounds])
     uv = np.concatenate([r.uv for r in rounds])
@@ -123,9 +126,10 @@ def build_map(rounds: list[Round], led_count: int,
         frame, led, uv = frame[keep], led[keep], uv[keep]
     if led.max(initial=-1) >= led_count:
         raise ScanError(f"the rounds have LEDs beyond the tree's {led_count}; "
-                        "scan again with --fresh")
-    res = sfm.solve(frame, led, uv, rounds[0].size, float(np.median([r.focal for r in rounds])),
-                    led_count)
+                        "scan again")
+    solver = planar.solve if shape == "flat" else sfm.solve
+    res = solver(frame, led, uv, rounds[0].size, float(np.median([r.focal for r in rounds])),
+                 led_count)
     try:
         P, status, info = cleanup(res.positions)
         P = normalise(P, status)
@@ -134,6 +138,7 @@ def build_map(rounds: list[Round], led_count: int,
     meta = {
         "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "rounds": len(rounds),
+        "shape": shape,
         **res.info,
         "outliers": info["outliers"],
         "forced_interpolate": sorted(interpolate),
@@ -166,6 +171,7 @@ class ScanSettings:
     max_rounds: int = 10
     fov_deg: float = 65.0
     colours: ColourModel | None = None  # the camera's measured colours; None: thresholds
+    shape: str = "tree"  # tree: 3D solve; flat: 2D (see build_map)
 
 
 def detections(tracker: Tracker, decoded: Decoded | None) -> dict:
@@ -179,6 +185,36 @@ def detections(tracker: Tracker, decoded: Decoded | None) -> dict:
         "blobs": [[round(float(u), 1), round(float(v), 1), known.get(t, -1)]
                   for (u, v), t in zip(uv, ids)],
     }
+
+
+class CodePlayer:
+    """Shows the code on the LEDs, each symbol on time, from a thread of its own: the
+    scan's frame processing takes long enough on a real camera's frames to make the
+    symbols late (and the codes unreadable) if the same loop played them."""
+
+    def __init__(self, output: LedOutput, codes: np.ndarray, symbol_s: float,
+                 brightness: int) -> None:
+        self.output, self.codes, self.symbol_s, self.brightness = output, codes, symbol_s, brightness
+        self.start = 0.0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="scan-code", daemon=True)
+
+    def _run(self) -> None:
+        k = 0  # symbols shown so far
+        while not self._stop.is_set():
+            slot = symbol_index(k * self.symbol_s + 1e-6, self.symbol_s, self.codes.shape[1])
+            self.output.show(frame_at(slot, self.codes, self.brightness))
+            k += 1
+            self._stop.wait(max(self.start + k * self.symbol_s - time.monotonic(), 0.0))
+
+    def __enter__(self) -> CodePlayer:
+        self.start = time.monotonic()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join()
 
 
 def scan(
@@ -210,27 +246,23 @@ def scan(
         decoded: Decoded | None = None
         meta: dict = {}
         camera.drain()
-        start = time.monotonic()
-        last_slot, last_update = -1, 0.0
-        while (now := time.monotonic()) < start + s.round_s:
-            check_cancel()
-            slot = symbol_index(now - start, s.symbol_s, codes.shape[1])
-            if slot != last_slot:
-                output.show(frame_at(slot, codes, s.brightness))
-                last_slot = slot
-            next_change = start + (math.floor((now - start) / s.symbol_s) + 1) * s.symbol_s
-            frame = camera.read(timeout=min(max(next_change - time.monotonic(), 0.0), 0.05))
-            if frame is not None:
-                tracker.add(frame.t, frame.image)
-                meta = frame.meta
-            if now - last_update >= UPDATE_S:
-                last_update = now
-                decoded = decode(tracker, s.symbol_s, lookup)
-                camera.show_detections(detections(tracker, decoded))
-                on_update({**base, "phase": "flashing",
-                           "remaining": round(start + s.round_s - now, 1),
-                           "frames": tracker.frame_count,
-                           "identified": len(set(decoded.led_of_track.values()))})
+        last_update = 0.0
+        with CodePlayer(output, codes, s.symbol_s, s.brightness) as player:
+            start = player.start
+            while (now := time.monotonic()) < start + s.round_s:
+                check_cancel()
+                frame = camera.read(timeout=0.05)
+                if frame is not None:
+                    tracker.add(frame.t, frame.image)
+                    meta = frame.meta
+                if now - last_update >= UPDATE_S:
+                    last_update = now
+                    decoded = decode(tracker, s.symbol_s, lookup)
+                    camera.show_detections(detections(tracker, decoded))
+                    on_update({**base, "phase": "flashing",
+                               "remaining": round(start + s.round_s - now, 1),
+                               "frames": tracker.frame_count,
+                               "identified": len(set(decoded.led_of_track.values()))})
         # 2. solving
         output.show(dim)
         decoded = decode(tracker, s.symbol_s, lookup)
@@ -248,7 +280,7 @@ def scan(
             saved.append(rnd)
         message = ""
         try:
-            tree_map, res = build_map(saved, n, load_overrides(s.scan_dir))
+            tree_map, res = build_map(saved, n, load_overrides(s.scan_dir), s.shape)
             tree_map.save(s.map_path)
         except (sfm.SfmError, ScanError) as e:
             message = str(e)

@@ -5,6 +5,10 @@
 # one in the viewer's Tree step or from sim.strips below), on the real tree it's where the
 # last controller's LEDs end.
 
+# What the LEDs are on: "tree" (wound round a tree, mapped in 3D) or "flat" (laid on the
+# floor or taped to a wall, mapped in 2D; "up" is up in the phone's picture).
+shape: tree
+
 # Where colours go: "sim" (browser viewer) or "wled" (DDP over UDP to the controllers below).
 output: sim
 
@@ -41,6 +45,7 @@ scan:
   status_s: 4          # seconds of status colours between rounds
   max_rounds: 10       # stop after this many rounds (or once every LED is ok)
   camera_fps: 24       # photos per second the viewer's virtual phone sends
+  countdown_s: 5       # seconds to point the camera at the LEDs before a scan starts
 
 # Effects engine (treemap run, and the viewer's Effects panel).
 engine:

@@ -61,3 +61,19 @@ class LedOutput(ABC):
         tb: TracebackType | None,
     ) -> None:
         self.close()
+
+
+class TeeOutput(LedOutput):
+    """Shows every frame on several outputs (e.g. the real LEDs and the viewer)."""
+
+    def __init__(self, *outputs: LedOutput) -> None:
+        super().__init__(outputs[0].led_count)
+        self.outputs = outputs
+
+    def _show(self, colors: np.ndarray) -> None:
+        for o in self.outputs:
+            o.show(colors)
+
+    def close(self) -> None:
+        for o in self.outputs:
+            o.close()

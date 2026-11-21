@@ -22,6 +22,7 @@ DEFAULT_CONFIG_PATH = Path("config.yaml")
 CONFIG_ENV_VAR = "TREEMAP_CONFIG"
 
 OUTPUT_TYPES = ("sim", "wled")
+SHAPES = ("tree", "flat")
 CAMERA_TYPES = ("sim", "android")
 MAX_LEDS = 5000  # the most LEDs anything here handles (also the sim generator's limit)
 REMOVED_KEYS = {
@@ -61,6 +62,7 @@ class ScanConfig:
     status_s: float = 4.0  # seconds of status colours between rounds
     max_rounds: int = 10  # stop after this many rounds (or when every LED is ok)
     camera_fps: float = 24.0  # frames per second the viewer's virtual phone sends
+    countdown_s: float = 5.0  # seconds to point the camera at the LEDs before a scan
 
 
 @dataclass
@@ -96,6 +98,9 @@ class SimConfig:
 
 @dataclass
 class Config:
+    # tree: LEDs wound round a tree, mapped in 3D. flat: LEDs laid on the floor (or on a
+    # wall), mapped in 2D.
+    shape: str = "tree"
     output: str = "sim"
     controllers: list[Controller] = field(
         default_factory=lambda: [Controller(host="wled-tree.local", start=0, count=400)]
@@ -193,6 +198,7 @@ class Config:
         return d
 
     def validate(self) -> None:
+        _check_choice("shape", self.shape, SHAPES)
         _check_choice("output", self.output, OUTPUT_TYPES)
 
         for i, c in enumerate(self.controllers):
@@ -236,6 +242,7 @@ class Config:
         _check_number("scan.status_s", s.status_s, minimum=0, maximum=60)
         _check_int("scan.max_rounds", s.max_rounds, minimum=1)
         _check_number("scan.camera_fps", s.camera_fps, minimum=5, maximum=60)
+        _check_number("scan.countdown_s", s.countdown_s, minimum=0, maximum=60)
         _check_number("camera.fov_deg", self.camera.fov_deg, minimum=20, maximum=150)
 
         _check_number("engine.fps", self.engine.fps, minimum=1, maximum=120)

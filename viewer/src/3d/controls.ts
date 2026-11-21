@@ -33,9 +33,20 @@ export function resetView(): void {
     camera.lookAt(0, H * 0.5, 0);
     return;
   }
-  const dist = (H * 0.72) / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-  orbit.target.set(0, H * 0.45, 0);
-  camera.position.set(0, H * 0.7, dist);
+  const half = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  if (!app.tree && app.map?.shape === "flat") {
+    // a 2D map stands upright like the photo it came from: look at it square-on, fitting
+    // its width too (the map's x is in the same units as its 0-1 height, shown H tall)
+    const xs = app.map.positions.flatMap((p) => (p && Number.isFinite(p[0]) ? [Math.abs(p[0]) * H] : []));
+    const halfW = Math.max(0.1, ...xs) * 1.1;
+    const dist = Math.max((H * 0.58) / half, halfW / (half * camera.aspect));
+    orbit.target.set(0, H * 0.5, 0);
+    camera.position.set(0, H * 0.5, dist);
+  } else {
+    const dist = (H * 0.72) / half;
+    orbit.target.set(0, H * 0.45, 0);
+    camera.position.set(0, H * 0.7, dist);
+  }
   orbit.update();
   userMoved = false;
   lastHeight = H;

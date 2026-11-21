@@ -79,9 +79,10 @@ def test_reads_frames_and_locks_exposure(ipwebcam):
         assert all(f is not None and f.image.shape == (48, 64, 3) for f in frames)
         assert frames[-1].t > frames[0].t
         assert cam.settings()["video_size"] == "64x48"
-        assert cam.locked() is False
-        assert cam.lock(True) and cam.locked()
-    assert settings["exposure_lock"] == "on" and settings["whitebalance_lock"] == "on"
+        assert cam.exposure()["exposure"] is False
+        assert cam.lock(True) and cam.exposure()["exposure"] and cam.exposure()["white_balance"]
+        assert cam.apply({"exposure_lock": "off"}) and not cam.exposure()["exposure"]
+    assert settings["exposure_lock"] == "off" and settings["whitebalance_lock"] == "on"
 
 
 def test_unreachable_phone_is_a_clear_error():

@@ -89,7 +89,7 @@ def fake_phone(port: int, tree: SimTree, stop: threading.Event) -> None:
 def test_server_scan_job_with_a_phone(cfg):
     from treemap.cli import _make_engine, _make_jobs
 
-    cfg.scan.round_s, cfg.scan.status_s = 7.0, 0.5
+    cfg.scan.round_s, cfg.scan.status_s, cfg.scan.countdown_s = 7.0, 0.5, 0.5
     tree = SimTree.load(cfg.sim_tree_path)
     srv = SimServer(tree_path=cfg.sim_tree_path, map_path=cfg.map_path, port=0,
                     led_count=cfg.led_count, cfg=cfg,

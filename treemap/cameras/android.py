@@ -179,20 +179,43 @@ class AndroidCamera(Camera):
     # neither: exposure stays put while manual_sensor is on (switching it on freezes what
     # auto exposure had chosen), and white balance while it's a preset rather than auto.
 
-    def locked(self) -> bool | None:
-        """Whether exposure and white balance are both fixed; None if unknown."""
+    EXPOSURE_KEYS = ("manual_sensor", "exposure_ns", "iso", "exposure_lock", "whitebalance",
+                     "whitebalance_lock")  # in the order to set them back
+
+    def exposure(self) -> dict[str, Any]:
+        """``{"exposure": fixed?, "white_balance": fixed?, "settings": {...}}``: whether
+        each is fixed (None if unknown), and the app's settings that decide it."""
         s = self.settings()
         if "exposure_lock" in s:
-            return s["exposure_lock"] == "on" and s.get("whitebalance_lock") == "on"
-        if "manual_sensor" in s:
-            return s["manual_sensor"] == "on" and s.get("whitebalance", "auto") != "auto"
-        return None
+            kind = "lock"
+            exp, wb = s["exposure_lock"] == "on", s.get("whitebalance_lock") == "on"
+        elif "manual_sensor" in s:
+            kind = "manual"
+            exp, wb = s["manual_sensor"] == "on", s.get("whitebalance", "auto") != "auto"
+        else:
+            kind, exp, wb = None, None, None
+        return {"kind": kind, "exposure": exp, "white_balance": wb,
+                "settings": {k: s[k] for k in self.EXPOSURE_KEYS if k in s}}
 
-    def lock(self, on: bool = True) -> bool:
-        """Fix (or free) exposure and white balance; True if the app accepted both."""
+    def set_exposure(self, exposure_ns: int, iso: int) -> bool:
+        """Manual exposure (``kind`` "manual" only: switching manual_sensor on applies
+        the stored exposure_ns and iso, not what auto exposure had chosen)."""
+        return all([self.set("manual_sensor", "on"), self.set("exposure_ns", str(exposure_ns)),
+                    self.set("iso", str(iso))])
+
+    def lock(self, on: bool = True, exposure: bool = True, white_balance: bool = True) -> bool:
+        """Fix (or free) the exposure and/or white balance; True if the app accepted it."""
         s = self.settings()
-        if "manual_sensor" in s and "exposure_lock" not in s:
-            return all([self.set("manual_sensor", "on" if on else "off"),
-                         self.set("whitebalance", "daylight" if on else "auto")])
+        new = "manual_sensor" in s and "exposure_lock" not in s
         value = "on" if on else "off"
-        return all([self.set("exposure_lock", value), self.set("whitebalance_lock", value)])
+        ok = True
+        if exposure:
+            ok &= self.set("manual_sensor" if new else "exposure_lock", value)
+        if white_balance:
+            ok &= (self.set("whitebalance", "daylight" if on else "auto") if new
+                   else self.set("whitebalance_lock", value))
+        return ok
+
+    def apply(self, settings: dict[str, Any]) -> bool:
+        """Set the app's exposure settings back to ``settings`` (from :meth:`exposure`)."""
+        return all([self.set(k, str(settings[k])) for k in self.EXPOSURE_KEYS if k in settings])

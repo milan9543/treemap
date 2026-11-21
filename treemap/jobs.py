@@ -6,8 +6,8 @@ so it first stops the effects engine via ``stop_effects``.
 
 Job kinds and their parameters:
 
-* ``scan``: ``fresh`` (bool: forget earlier rounds), ``rounds`` (int, default
-  scan.max_rounds). Runs until every LED is ok, the rounds are done, or it's stopped.
+* ``scan``: ``rounds`` (int, default scan.max_rounds). Starts over (earlier rounds are
+  forgotten) and runs until every LED is ok, the rounds are done, or it's stopped.
 * ``reconstruct``: solve again from the saved rounds
 * ``evaluate`` (simulator only)
 * ``interpolate``, ``measure``: ``index``; interpolate ignores that LED's observations
@@ -172,7 +172,6 @@ class Jobs:
 
     def _prepare_scan(self, p: dict) -> Callable[[], dict]:
         cfg = self.cfg
-        fresh = bool(p.get("fresh", False))
         rounds = p.get("rounds")
         if rounds is not None and (isinstance(rounds, bool) or not isinstance(rounds, int)
                                    or rounds < 1):
@@ -181,7 +180,7 @@ class Jobs:
         def run() -> dict:
             workflow.ensure_sim_tree(cfg)
             tree_map = self._with_output(lambda out: workflow.run_scan(
-                cfg, out, fresh=fresh, rounds=rounds, sim_port=self.sim_port,
+                cfg, out, rounds=rounds, sim_port=self.sim_port,
                 on_update=self._on_update, check_cancel=self._check_cancel,
             ))
             return workflow.map_summary(tree_map) if tree_map is not None else {}

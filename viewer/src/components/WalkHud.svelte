@@ -1,19 +1,20 @@
 <script lang="ts">
+  import { PHASES, phaseTotal, roundLabel } from "../lib/scan";
   import { app } from "../lib/state.svelte";
   import ProgressBar from "./ui/ProgressBar.svelte";
 
   const p = $derived(app.scanning ? app.job.progress : null);
-  const total = $derived(p?.phase === "status" ? app.config?.config?.scan.status_s : app.config?.config?.scan.round_s);
-  const phase = $derived(!p ? "" : p.phase === "flashing" ? "Flashing codes" : p.phase === "solving" ? "Solving positions…" : "Showing the result");
+  const total = $derived(p ? phaseTotal(p) : undefined);
+  const phase = $derived(p ? PHASES[p.phase] : "");
 </script>
 
 <div class="top">
   {#if p}
     <div class="pill">
-      <div class="line"><b>Round {p.round}</b><span>{phase}</span>
-        {#if p.remaining !== undefined && p.phase !== "solving"}<span class="mono">{p.remaining.toFixed(0)} s</span>{/if}
+      <div class="line"><b>{roundLabel(p)}</b><span>{phase}</span>
+        {#if p.remaining !== undefined}<span class="mono">{Math.ceil(p.remaining)} s</span>{/if}
       </div>
-      {#if total && p.remaining !== undefined && p.phase !== "solving"}
+      {#if total && p.remaining !== undefined}
         <ProgressBar value={1 - p.remaining / total} tone={p.phase === "status" ? "warn" : "accent"} />
       {/if}
       <div class="line small">
@@ -22,6 +23,8 @@
           <span class="failed">{p.counts.failed} unknown</span>
         {:else if p.phase === "status" && p.message}
           <span class="warn">{p.message}</span>
+        {:else if p.round === 0}
+          <span>get the phone pointed at the tree</span>
         {:else}
           <span>{p.identified ?? 0} LEDs identified this round</span>
         {/if}

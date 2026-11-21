@@ -17,8 +17,9 @@ onto them), and its LEDs light up the branches and the floor round them, in the 
 and, more faintly, in the phone's photos.
 
 > **Status:** the simulator, scanning, mapping checks, the effects engine, the WLED
-> output (`output: wled`) and the Android camera (`camera: android`) work. Scanning the
-> real LEDs hasn't been tried end to end yet; see [ROADMAP.md](ROADMAP.md).
+> output (`output: wled`) and the Android camera (`camera: android`) work. A flat layout
+> (`shape: flat`: strips on the floor) has been scanned on real LEDs; a real tree not
+> yet. See [ROADMAP.md](ROADMAP.md).
 
 ## Install
 
@@ -52,8 +53,11 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
 
 1. **Tree** (simulator only): set up the strips, size and layout, then press
    **Generate**. Leave a field blank to randomise it.
-2. **Scan**: press **Start scanning**. The view switches to walk mode and the LEDs start
-   flashing their codes. Walk round the tree:
+2. **Scan**: press **Start scanning**. A scan starts over: the earlier one's rounds are
+   forgotten. First the LEDs glow dim white for `scan.countdown_s` (5 s) while you get
+   the camera pointed at them; with a real phone its exposure and colours are set next
+   (see [Real camera](#real-camera-an-android-phone)). Then the view switches to walk
+   mode and the LEDs start flashing their codes. Walk round the tree:
    - `W` `A` `S` `D` move, the mouse looks round, `Space` and `Shift` go up and down;
    - the panel at the top shows the round, its time left and how many LEDs were
      identified; the **phone** in the bottom right shows what the virtual phone films,
@@ -63,8 +67,8 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
    - `Esc` pauses: from there **Resume walking**, **Stop scan** or **Leave walk mode**.
      The scan also stops by itself once every LED is ok, or after `scan.max_rounds`.
 
-   Each round writes `data/tree_map.json`. **Solve again** re-solves from the saved
-   rounds; **Start over** forgets them.
+   Each round writes `data/tree_map.json`, solved from all the rounds of this scan.
+   **Solve again** re-solves from them.
 3. **Map**: how many LEDs are placed, interpolated or failed.
    - **Status colours** and **Verify sweep** check the map on the tree. In the sweep, an
      LED that lights out of step with its neighbours is in the wrong place.
@@ -107,7 +111,6 @@ Keep `treemap sim view` running in one terminal to watch; run these in another.
 | Make a new random tree | `treemap sim new [--seed 42] [--strip 200:14:top …]` |
 | Check the wiring order | `treemap test chase`, `treemap test led 57`, `treemap test off` |
 | Scan (walk round the tree in the viewer meanwhile) | `treemap scan [--rounds 3]` |
-| Start a scan over | `treemap scan --fresh` |
 | Solve again from the saved rounds | `treemap reconstruct` |
 | Show the mapping quality | `treemap show-mapping` (add `--verify` for the sweep) |
 | Inspect and fix one LED | `treemap fix 57` (asks: interpolate, measure again or keep) |
@@ -119,8 +122,9 @@ Keep `treemap sim view` running in one terminal to watch; run these in another.
 | Check the camera can scan (and measure its colours) | `treemap camera check [--brightness 100]` |
 | Show the config | `treemap config show` |
 
-`treemap scan` needs the viewer open, because the viewer's virtual phone films the
-tree. Rounds that finished are kept, so a stopped scan continues where it left off.
+In the simulator, `treemap scan` needs the viewer open, because the viewer's virtual
+phone films the tree. Every scan starts over; a stopped scan keeps the rounds it
+finished (for `treemap reconstruct` and `treemap fix`) until the next scan.
 
 ## What the statuses mean
 
@@ -148,11 +152,13 @@ change:
 
 | Key | What it does |
 |---|---|
+| `shape` | `tree` (mapped in 3D) or `flat` (strips on the floor or a wall, mapped in 2D; see [Flat layouts](#flat-layouts-strips-on-the-floor-or-a-wall)). |
 | `output` | `sim` (the browser viewer) or `wled` (the controllers, see [Real LEDs](#real-leds-wled)). |
 | `controllers` | WLED controllers, each owning a slice of the LED indices; `reverse: true` for a strip wired from the other end. |
 | `camera.type`, `camera.url` | `sim` (the viewer's virtual phone), or `android` with the IP Webcam URL (see [Real camera](#real-camera-an-android-phone)). |
 | `camera.fov_deg` | The phone camera's horizontal field of view; a starting guess the solve refines. |
 | `scan.round_s`, `scan.status_s` | Seconds of flashing per round, and of status colours between rounds. |
+| `scan.countdown_s` | Seconds the LEDs glow dim white before a scan, to point the camera at them. |
 | `scan.max_rounds` | Stop after this many rounds (the scan also stops once every LED is ok). |
 | `scan.symbol_ms` | How long each colour of the code shows. Slow it down if a real camera misreads colours. |
 | `scan.brightness` | LED brightness while flashing, 0–255. Lower stops a real camera clipping colours to white. |
@@ -201,7 +207,8 @@ Then:
    that each strip starts where you expect. `treemap test led 57` lights one LED.
 3. `treemap run rainbow` (or any effect) runs it on the LEDs. The 3D effects need a
    scanned map. `treemap sim view` drives the controllers from the viewer's Effects step
-   too; its 3D view still shows the simulated tree, not your LEDs.
+   too. If the viewer is open, it mirrors what the LEDs show, on the scanned map (with
+   a real camera it doesn't show the simulated tree).
 
 WLED shows treemap's colours while they keep arriving and goes back to its own effect a
 few seconds after they stop. If WLED's settings show "Receive UDP realtime" switched
@@ -239,7 +246,35 @@ clip to white in the middle; their colour is read from the glow round them. It p
 "the camera is ready to scan" when every colour reads right at least 85% of the time;
 the code's check digit and the votes over several cycles handle the rest.
 
-A scan locks the exposure and white balance itself if they aren't already.
+**Every scan does this itself** before its first round, after the countdown, so the
+exposure and colours always fit the light at the time. On phones where IP Webcam uses
+manual sensor mode, it tries exposures from 0.5 to 16 ms (ISO 100) with the LEDs white
+and keeps the shortest that sees nearly as many LEDs as the best; on older phones it
+lets automatic exposure adjust, then locks it. `treemap camera check` is for trying a
+setup out without scanning.
+
+## Flat layouts: strips on the floor or a wall
+
+Without a tree yet, lay the strips out flat (on the floor, or taped to a wall) and set
+
+```yaml
+shape: flat
+```
+
+Put the phone where it sees all of the LEDs, on something steady, looking down at them
+(straight down or at an angle both work), and scan with `treemap scan` or the viewer's
+Scan step. The phone may also move round; it doesn't have to.
+
+All the LEDs lie in one plane, so the flat scan maps every photo onto one reference
+photo (a homography per photo) instead of solving 3D positions, and takes each LED's
+position as the median over the photos. It then works out the angle the phone looked
+at the floor from: the tilt that makes the spacing between neighbouring LEDs as even as
+it is on the strip. The map comes out as seen square-on, with "up" being the top of the
+phone's picture and z = 0, so effects that sweep up, across or out from the middle work;
+those that turn round a tree's trunk don't mean much.
+
+The viewer shows a flat map upright, the way the phone saw it. With `output: wled` it
+also mirrors what the LEDs show, so you can watch effects and the scan in the browser.
 
 ## Scanning the real tree
 
@@ -263,14 +298,13 @@ The scan works the same way as in the simulator; only the output and camera chan
 - **"sim viewer not reachable"**: start `treemap sim view`. The command still works
   without it; you just can't watch.
 - **"the tree map has N LEDs but the tree has M"**: the map was scanned on a tree with a
-  different number of LEDs (in the simulator, before you generated a new one). Scan again
-  with **Start over** (`--fresh`).
+  different number of LEDs (in the simulator, before you generated a new one). Scan again.
 - **"the viewer's camera isn't reachable"** or **"no camera frames arrived"**: the scan
   films through the viewer, so keep `treemap sim view` running and the viewer page open.
 - **A round finds few LEDs**: the phone has to see the tree. Walk back until the whole
   tree is in the phone inset, and keep moving round it.
-- **Scan refused with "filmed at different sizes" or "LEDs beyond the tree's N"**: the
-  earlier rounds don't fit. Scan again with **Start over** (`--fresh`).
+- **Solve again refused with "filmed at different sizes" or "LEDs beyond the tree's N"**:
+  the saved rounds don't fit. Scan again.
 - **The viewer still shows the old version after an update**: rebuild it
   (`npm --prefix viewer run build`) and reload the page.
 - **"The viewer isn't built yet"**: run `npm --prefix viewer install` and
@@ -297,7 +331,7 @@ workflow step.
 |---|---|
 | `cameras/` | The camera interface, the viewer's virtual phone, the Android phone (IP Webcam) and the camera check. |
 | `outputs/` | The LED output interface, the viewer output and the WLED (DDP) output. |
-| `scan/` | The LED code, blob tracking and decoding, structure from motion, scan rounds, cleanup and evaluation. |
+| `scan/` | The LED code, blob tracking and decoding, measured camera colours, structure from motion (tree), the flat solve, scan rounds, cleanup and evaluation. |
 | `mapping/` | The tree map file and the quality views. |
 | `effects/` | The effects. |
 | `engine.py` | Runs effects at a fixed frame rate. |

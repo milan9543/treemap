@@ -6,20 +6,19 @@
   import Card from "../components/ui/Card.svelte";
   import ProgressBar from "../components/ui/ProgressBar.svelte";
   import StepHeader from "../components/ui/StepHeader.svelte";
-  import Toggle from "../components/ui/Toggle.svelte";
   import { cancelJob, startJob, startScan } from "../lib/actions";
   import { STATUS_COLORS } from "../lib/colors";
+  import { PHASES, phaseTotal, roundLabel } from "../lib/scan";
   import { app } from "../lib/state.svelte";
 
-  let fresh = $state(false);
   const p = $derived(app.scanning ? app.job.progress : null);
   const scanCfg = $derived(app.config?.config?.scan);
-  const total = $derived(p?.phase === "status" ? scanCfg?.status_s : scanCfg?.round_s);
-  const PHASES = { flashing: "Flashing codes", solving: "Solving positions", status: "Showing the result" };
+  const total = $derived(p ? phaseTotal(p) : undefined);
+  const ready = $derived(p?.round === 0);
 
   function start() {
-    if (fresh && !confirm("Forget the earlier scan rounds and start from scratch?")) return;
-    startScan(fresh);
+    if (app.map && !confirm("Start a new scan? The earlier scan's rounds are forgotten.")) return;
+    startScan();
   }
 </script>
 
@@ -28,18 +27,25 @@
 {#if p}
   <Card title="Scanning">
     <div class="phase">
-      <span class="round">Round {p.round}</span>
+      <span class="round">{roundLabel(p)}</span>
       <span>{PHASES[p.phase]}</span>
-      {#if p.remaining !== undefined && p.phase !== "solving"}<span class="mono muted">{p.remaining.toFixed(0)} s</span>{/if}
+      {#if p.remaining !== undefined}<span class="mono muted">{Math.ceil(p.remaining)} s</span>{/if}
     </div>
-    {#if total && p.remaining !== undefined && p.phase !== "solving"}
+    {#if total && p.remaining !== undefined}
       <ProgressBar value={1 - p.remaining / total} tone={p.phase === "status" ? "warn" : "accent"} />
     {/if}
+    {#if ready}
+      <p class="hint">
+        {#if p.phase === "countdown"}Point the camera at the LEDs and keep it there.
+        {:else}The LEDs show white, then red, green and blue while the camera adjusts.{/if}
+      </p>
+    {:else}
     <div class="stats">
       <div><b class="mono">{p.identified ?? 0}</b><span>LEDs identified</span></div>
       <div><b class="mono">{p.frames ?? 0}</b><span>photos</span></div>
       <div><b class="mono">{app.phoneFps}</b><span>photos / s</span></div>
     </div>
+    {/if}
     {#if p.phase === "status"}
       {#if p.counts}
         <div class="counts">
@@ -49,7 +55,7 @@
       {:else if p.message}
         <p class="hint warn">{p.message}</p>
       {/if}
-    {:else if p.phase === "flashing" && (p.frames ?? 0) === 0}
+    {:else if p.phase === "flashing" && (p.frames ?? 0) === 0 && app.sim}
       <p class="hint warn">No photos yet: the scan films through the viewer's phone.</p>
     {/if}
     <div class="buttons">
@@ -62,7 +68,9 @@
 {:else}
   <Card>
     <ol class="howto">
-      <li>Press <b>Start</b>. Every LED flashes its own code of red, green and blue.</li>
+      <li>Press <b>Start</b>{#if (scanCfg?.countdown_s ?? 0) > 0} and point the camera at the LEDs within
+        {scanCfg?.countdown_s} s{/if}.{#if !app.sim} The phone's exposure and colours are set first.{/if}
+        Then every LED flashes its own code of red, green and blue.</li>
       {#if app.sim}
         <li>Walk round the tree: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move, the mouse looks round.
           The phone films what you see.</li>
@@ -75,7 +83,7 @@
     <Button variant="primary" size="lg" icon={Play} full disabled={!app.jobsAvailable || app.jobActive} onclick={start}>
       Start scanning
     </Button>
-    <Toggle bind:checked={fresh} title="Forget the earlier rounds instead of adding to them">Start over (forget earlier rounds)</Toggle>
+    <p class="hint">Each scan starts over; its rounds build on each other.</p>
     {#if !app.jobsAvailable}<p class="hint warn">Scanning isn't available from this server.</p>{/if}
   </Card>
 {/if}

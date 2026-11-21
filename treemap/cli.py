@@ -307,15 +307,8 @@ def _output_factory(cfg: Config, sim_port: int | None = None, source: str | None
     """Opens the configured output (the sim viewer on ``sim_port``). ``source`` names
     the sender in the viewer (default: this command)."""
     from treemap.outputs import create_output
-    from treemap.outputs.sim import SimOutput
 
-    def factory():
-        if cfg.output == "sim":
-            return SimOutput(cfg.led_count, host=cfg.sim.host, port=sim_port or cfg.sim.port,
-                             source=source)
-        return create_output(cfg)
-
-    return factory
+    return lambda: create_output(cfg, sim_port, source)
 
 
 def _make_jobs(cfg: Config, server):
@@ -436,13 +429,12 @@ def scan(
         typer.Option(min=1, help="Rounds to run. Default: scan.max_rounds (it also stops "
                      "once every LED is ok).", show_default=False),
     ] = None,
-    fresh: Annotated[
-        bool, typer.Option(help="Forget earlier rounds and start over.")
-    ] = False,
 ) -> None:
     """Flash every LED's code while you walk round the tree with the camera.
 
-    Each round flashes for scan.round_s seconds, solves the positions from every round so
+    A scan starts over: earlier rounds are forgotten. First there's a countdown of
+    scan.countdown_s to point the camera at the LEDs, then the phone's exposure is set
+    and its colours measured. Each round flashes for scan.round_s seconds, solves the positions from every round so
     far, then shows the result on the tree for scan.status_s: green ok, yellow
     interpolated, red failed. Walk to the red parts for the next round. With the sim
     camera, walk round the tree in the viewer (`treemap sim view`, press f).
@@ -454,7 +446,7 @@ def scan(
         typer.echo("No simulated tree yet, generated one.")
     with _output(ctx) as out:
         try:
-            tree_map = workflow.run_scan(cfg, out, fresh=fresh, rounds=rounds,
+            tree_map = workflow.run_scan(cfg, out, rounds=rounds,
                                          on_update=_scan_progress, on_message=typer.echo)
         except workflow.WorkflowError as e:
             typer.echo()
@@ -468,7 +460,14 @@ def scan(
 
 def _scan_progress(u: dict) -> None:
     phase = u["phase"]
-    if phase == "flashing":
+    if phase == "countdown":
+        typer.echo(f"\rstarting in {u['remaining']:3.0f} s: point the camera at the LEDs   ",
+                   nl=False)
+    elif phase == "exposure":
+        typer.echo("\rsetting the camera's exposure…" + " " * 30)
+    elif phase == "colours":
+        typer.echo("measuring how the camera sees the colours…")
+    elif phase == "flashing":
         typer.echo(f"\rround {u['round']}: flashing, {u['remaining']:4.1f} s left, "
                    f"{u['identified']} LEDs identified   ", nl=False)
     elif phase == "solving":
@@ -784,7 +783,7 @@ def camera_check(
     import cv2
 
     from treemap.cameras import CameraError, create_camera
-    from treemap.cameras.check import advice, colour_check, measure_fps, settle_and_lock
+    from treemap.cameras.check import advice, colour_check, fix_exposure, measure_fps
 
     cfg = ctx.obj.config
     brightness = brightness or cfg.scan.brightness
@@ -800,12 +799,9 @@ def camera_check(
             typer.echo("  " + ", ".join(f"{k} {settings[k]}" for k in (
                 "video_size", "quality", "exposure_lock", "whitebalance_lock", "manual_sensor",
                 "exposure_ns", "iso", "whitebalance", "focusmode") if k in settings))
-        if settings is not None:
-            typer.echo("adjusting exposure and white balance to the LEDs in white…")
-            locked = settle_and_lock(camera, out, brightness)
-            typer.secho("  locked" if locked else
-                        "  couldn't lock them; lock exposure and white balance in IP Webcam",
-                        fg=typer.colors.GREEN if locked else typer.colors.YELLOW)
+        done = fix_exposure(camera, out, brightness)
+        if done:
+            typer.echo(f"  {done}")
         typer.echo("measuring the frame rate…")
         fps, size = measure_fps(camera)
         if size is None:
@@ -823,11 +819,13 @@ def camera_check(
         if r.sample is not None:
             cv2.imwrite(str(folder / f"{r.name}.jpg"), r.sample)
     typer.secho(f"sample frames in {folder}", fg=typer.colors.BRIGHT_BLACK)
+    if model is not None and min(r.blobs for r in results) < 10:
+        model = None  # too few LEDs to measure from: keep the last good measurement
     if model is not None:
-        model.meta.update(camera=cfg.camera_id, video_size=list(size))
-        model.save(cfg.colours_path)
-        typer.echo(f"saved how this camera sees the colours in {cfg.colours_path}; the scan "
-                   "reads colours by it")
+        from treemap.workflow import save_colours
+
+        save_colours(cfg, model, camera, results)
+        typer.echo(f"saved how this camera sees the colours in {cfg.colours_path}")
     else:
         typer.secho("the colours couldn't be measured, so nothing was saved",
                     fg=typer.colors.YELLOW)

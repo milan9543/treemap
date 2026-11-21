@@ -45,18 +45,48 @@ def read_for(camera: Camera, seconds: float) -> list:
     return frames
 
 
-def settle_and_lock(camera: Camera, output: LedOutput, brightness: int,
-                    seconds: float = 2.5) -> bool:
-    """Let the camera's automatic exposure and white balance adjust to the LEDs in white
-    at the scan's brightness (the brightest the code gets), then lock both. Only for
-    cameras that can lock (the Android one); returns True if they were locked."""
-    lock = getattr(camera, "lock", None)
-    if lock is None:
-        return False
-    lock(False)
+EXPOSURES_NS = (500_000, 1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000)
+ISO = 100
+ENOUGH = 0.9  # of the most LEDs any exposure sees
+
+
+def fix_exposure(camera: Camera, output: LedOutput, brightness: int,
+                 seconds: float = 2.5) -> str | None:
+    """Fix the camera's exposure and white balance for the scan, so colours don't drift
+    while the LEDs flash. The LEDs show white at the scan's brightness (the brightest
+    the code gets) meanwhile. Only for cameras that can (the Android one); returns what
+    was done, or None if there's nothing it can do.
+
+    - Manual exposure (IP Webcam on most phones): try each of EXPOSURES_NS and keep the
+      shortest that sees nearly as many LEDs as the best; shorter clips less.
+    - Exposure lock (older phones): let automatic exposure adjust, then lock it.
+    """
+    state = camera.exposure() if hasattr(camera, "exposure") else None
+    if state is None or state["kind"] is None:
+        return None
     output.show(solid(output.led_count, SYNC, brightness))
+    if state["kind"] == "manual":
+        camera.lock(True, exposure=False)  # white balance
+        seen = []
+        for ns in EXPOSURES_NS:
+            if not camera.set_exposure(ns, ISO):
+                return "couldn't set the exposure; set it in IP Webcam"
+            read_for(camera, 0.7)  # frames from before the change
+            counts = [len(find_blobs(f.image)) for f in read_for(camera, 0.4)]
+            seen.append(int(np.median(counts)) if counts else 0)
+        if max(seen) == 0:
+            camera.set_exposure(EXPOSURES_NS[2], ISO)
+            return "no LEDs seen at any exposure: point the phone at the LEDs"
+        best = next(ns for ns, k in zip(EXPOSURES_NS, seen) if k >= ENOUGH * max(seen))
+        camera.set_exposure(best, ISO)
+        read_for(camera, 0.7)
+        return (f"exposure {best / 1e6:g} ms at ISO {ISO} (LEDs seen per exposure: "
+                + ", ".join(f"{ns / 1e6:g} ms {k}" for ns, k in zip(EXPOSURES_NS, seen)) + ")")
+    camera.lock(False)
     read_for(camera, seconds)  # keep the stream flowing while it adjusts
-    return bool(lock(True))
+    ok = camera.lock(True)
+    return "adjusted exposure and white balance to the LEDs, then locked them" if ok else \
+        "couldn't lock exposure and white balance; lock them in IP Webcam"
 
 
 @dataclass

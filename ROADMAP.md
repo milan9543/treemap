@@ -116,6 +116,12 @@ treemap/
 - This batch can be done with the phone alone, before WLED arrives.
 - **Done when:** frames arrive reliably over Wi-Fi at 20+ fps.
 
+#### Batch 9b: flat layouts — done
+- `shape: flat`: strips on the floor or a wall, mapped in 2D (homographies onto a reference photo, then the plane's tilt from even LED spacing), so scanning and effects can be tried on real LEDs before there's a tree.
+- Scans start over, with a countdown, then set the phone's exposure and measure its colours.
+- With `output: wled`, the viewer mirrors the LEDs and hides the simulated tree.
+- Next: a flat layout in the simulator.
+
 #### Batch 10: real tree session
 - Set `output: wled` and `camera: android`, then:
   - `test chase` to confirm the index order;

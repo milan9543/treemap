@@ -159,6 +159,9 @@ class SimServer:
                 "effects": describe_effects(self.current_led_count()),
             }
             return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
+        if path in ("/api/tree", "/api/compare") and not self._simulating():
+            return _response(HTTPStatus.NOT_FOUND, json.dumps(
+                {"error": "not simulating: the camera is a real one"}).encode(), "application/json")
         if path == "/api/tree":
             return self._tree_response()
         if path == "/api/map":
@@ -173,6 +176,11 @@ class SimServer:
                                  "application/json")
             return _response(HTTPStatus.OK, json.dumps(body).encode(), "application/json")
         return _response(HTTPStatus.NOT_FOUND, b"not found", "text/plain; charset=utf-8")
+
+    def _simulating(self) -> bool:
+        """Whether the simulated tree is what's being scanned. With a real camera, an
+        old sim_tree.json on disk has nothing to do with the LEDs."""
+        return self.cfg is None or self.cfg.camera.type == "sim"
 
     def _tree_response(self) -> Response:
         """The tree file, with branches grown for one saved by an older version."""
