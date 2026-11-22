@@ -196,15 +196,26 @@
   }
 
   function tryIt() {
+    if (onLeds === "try") return void off();
     void play("plane", flat ? { direction: "up", speed: 0.3, color: "gold" }
       : { direction: "around", speed: 0.15, color: "gold" }, "try");
+  }
+
+  function risingPlane() {
+    if (onLeds === "plane") return void off();
+    void play("plane", { direction: "up", speed: 0.2, color: "white" }, "plane");
+  }
+
+  async function off() {
+    await show({ mode: "off" }, "off");
+    onLeds = null;
   }
 
   onMount(load);
 
   onDestroy(() => {
-    // leave an effect playing, but not a test pattern
-    if (onLeds && onLeds !== "try" && onLeds !== "plane") void api.leds({ mode: "off" }).catch(() => {});
+    // everything this screen shows is a check: leaving it turns the LEDs off
+    if (onLeds) void api.leds({ mode: "off" }).catch(() => {});
   });
 
   const date = (iso: string | null) =>
@@ -267,8 +278,8 @@
       <p class="small muted">Run a plane up the {flat ? "LEDs" : "tree"}: an LED that lights out
         of step with those round it is in the wrong place. Find its number, then ignore its
         readings so it's filled in from its neighbours.</p>
-      <button class="wide" onclick={() => play("plane", { direction: "up", speed: 0.2, color: "white" }, "plane")}>
-        {onLeds === "plane" ? "Running: tap to start again" : "Run a rising plane"}</button>
+      <button class="wide" onclick={risingPlane}>
+        {onLeds === "plane" ? "Stop the plane" : "Run a rising plane"}</button>
       <div class="stepper">
         <button aria-label="Previous LED" disabled={index <= 0 || solving} onclick={() => lightOne(index - 1)}>−</button>
         <input type="number" inputmode="numeric" min="0" max={n - 1} aria-label="LED number"
@@ -321,7 +332,8 @@
       <div class="actions">
         <button class="primary" disabled={!dirty || saving} onclick={save}>
           {saving ? "Saving…" : dirty ? `Save the ${flat ? "bottom" : "front"}` : "Saved"}</button>
-        <button onclick={tryIt}>{flat ? "Try: rising plane" : "Try: beam from the front"}</button>
+        <button onclick={tryIt}>{onLeds === "try" ? "Stop"
+          : flat ? "Try: rising plane" : "Try: beam from the front"}</button>
       </div>
       {#if savedNote && !dirty}
         <p class="small muted after">Every effect now uses this {flat ? "bottom" : "front"}.</p>
