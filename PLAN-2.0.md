@@ -18,9 +18,10 @@ gets through them**. It doesn't change the algorithms.
 | Which browsers? | **Android Chrome only** for scanning. | It's also the only browser that lets a page lock the camera's exposure and white balance. iOS Safari can't. |
 | Where does solving run? | **On the server**, in the existing Python code. | It's tested and runs as it is; it takes the same time on every phone; the rounds are kept, so a scan can be solved again after a solver fix. Video is only 2–4 MB/s even at 720p, trivial for home Wi-Fi. |
 | Who runs the scan? | **The phone.** It calls the server step by step: LEDs white, try this exposure, show red, start a round, and so on. | The user holds the phone, so every prompt and decision belongs on its screen. |
-| Effects UI | **In the same hosted page**, so users have one app. The server also serves the page over plain HTTP as a fallback. | One app; the server can run with no UI of its own. |
-| Scope | **One server drives one tree, on one or more WLED controllers.** | 1.x already splits the LEDs across controllers, and each controller only receives its own LEDs, so more controllers add almost no load. Each controller's LED count comes from WLED itself. |
-| Map history | **None: only the current map.** A new scan replaces it, and its rounds replace the old rounds. | Nothing to manage or clean up. Rounds are still kept until the next scan, so the current scan can be solved again. |
+| Effects UI | **On the server's own page** (revised 2026-11-22), with the devices, their LEDs in 3D and a QR code per device. The hosted scan page only scans. | The server's page is where the devices live, and it can show and preview effects in 3D; the scan page stays small and phone-only. |
+| Scope | **One server drives several devices** (revised 2026-11-22). Each device is one WLED controller with its own LEDs, map, scans and effects. | The real tree and a virtual one (or a tree and a window) can run side by side. A tree split over two controllers isn't covered yet. |
+| Devices | **Added on the server's page by address; nothing in the config.** Kept in `data/devices.json`; the first run has none. Each LED count is read from WLED once and kept. | No config file to edit. A device that's off stays on the list: its map shows, and effects preview on the page. |
+| Map history | **None: only the current map,** per device. A new scan replaces it, and its rounds replace the old rounds. | Nothing to manage or clean up. Rounds are still kept until the next scan, so the current scan can be solved again. |
 | Home Assistant | **MQTT discovery.** The server announces a light whose effect list is your favourites, and a select entity for playlists. | Home Assistant creates the entities itself: no custom integration to write or keep up to date. |
 
 ## How it fits together
@@ -41,12 +42,13 @@ gets through them**. It doesn't change the algorithms.
 ### The user's flow
 
 1. **Install** the server: Docker, or a Home Assistant add-on.
-2. **Open the scan page** from the server: its page (and `treemap serve` in the terminal)
-   shows a QR code and a link like `https://<project>.pages.dev/?server=http://192.168.1.20:8765`.
+2. **Add the controller** on the server's page (`http://<server>:8765/`) by its address.
+3. **Open the scan page** from the device's QR code on the server's page: a link like
+   `https://<project>.pages.dev/?server=http://192.168.1.20:8765&device=<id>`.
    Chrome asks for the local network permission once. Pick **tree** or **flat**.
-3. **Check the wiring:** the page runs the chase and asks "did the light run from the
+4. **Check the wiring:** the page runs the chase and asks "did the light run from the
    start of strip 1 to the end?".
-4. **Scan:**
+5. **Scan:**
    1. LEDs glow white; point the camera at them.
    2. Exposure: the page tries exposures (shortest first) while the server counts the
       LEDs it sees in the uploaded frames, and keeps the shortest that sees nearly all.
@@ -55,9 +57,9 @@ gets through them**. It doesn't change the algorithms.
       this phone sees each colour (today's `camera check`).
    4. Rounds: the LEDs flash their codes while the user walks round; after each round
       the server shows the status colours on the tree and the page shows the counts.
-5. **Review:** fix red LEDs (scan that part again, or interpolate). Then set the
+6. **Review:** fix red LEDs (scan that part again, or interpolate). Then set the
    **front** (tree) or **bottom** (flat), see below. Save.
-6. **Enjoy:** effects, favourites and playlists on the page, or from Home Assistant.
+7. **Enjoy:** effects, favourites and playlists on the page, or from Home Assistant.
 
 ### Setting the front and the bottom (new)
 
@@ -74,6 +76,9 @@ The map keeps its solved positions and stores the orientation alongside them
 without scanning again. `Geometry.of` applies it, so every effect picks it up.
 
 ## The server API (first sketch)
+
+Now `/api/v2`, with every device endpoint under `/devices/{id}` (Phase 6b); the
+modules' docstrings have the current list. The first sketch:
 
 All under `/api/v1`, JSON unless noted. Every response carries CORS headers for the
 hosted page's origin (configurable), and `OPTIONS` preflights are answered.
@@ -159,7 +164,7 @@ controllers with only a host; engine timing. Tested on this Mac, with the simula
 and a stand-in phone that uploads rendered frames. Still to check on the real tree:
 2.2 from the phone (`https://treemap-spike.pages.dev/?server=http://<ip>:8765&ping=/api/v1/info`),
 2.3 chase on the LEDs, 2.5 with only the host, 2.5b stutter. Changes from the sketch:
-`POST /play` already runs an effect (Phase 6 adds favourites and playlists); a frame
+`POST /play` already runs an effect (Phase 6 added favourites and playlists); a frame
 batch is each frame with a 4-byte length in front; `/scan/state` gives each LED's
 status as one letter (o, i, f).
 
@@ -307,11 +312,70 @@ opened after a scan or from the connect screen. Not yet tried on the phone. Chan
 
 ## Phase 6: effects on the page
 
+**Built** (2026-11-22): an **Effects** screen, first on the scan page, then moved to the
+server's own page in Phase 6b ([viewer/src/server/EffectsPanel.svelte](viewer/src/server/EffectsPanel.svelte)); favourites and playlists in `data/library.json`
+([treemap/library.py](treemap/library.py)), played by [treemap/player.py](treemap/player.py).
+Tested through the API on this Mac; not yet tried on the phone. Changes from the sketch:
+- `GET /effects` leaves out the test patterns and scan views (Diagnostics, Mapping) and
+  says which effects `needs_map`; the page greys those out without a map.
+- `GET /play` says what's playing: the effect and its settings, the brightness, the
+  favourite last started and the playlist (which item, seconds to the next). New:
+  `POST /play/params` (tune live), `POST /play/next`, `POST /brightness`, `POST /stop`.
+- A favourite stores every parameter, so the page can tell what's playing is one, or
+  "changed from" one (Update it). A playlist is `{name, items: [{favourite,
+  duration_s}], crossfade_s, shuffle}`; it loops, picks up edits each round, skips
+  favourites that can't play, and ends when anything else is played. Deleting a
+  favourite takes it out of playlists.
+- **The viewer keeps its favourites on its server too** (same file, over its websocket),
+  so the "one-time import" is automatic: the first time it connects it hands over what
+  it kept in localStorage (stale settings get defaults, duplicates are skipped).
+- The brightness isn't saved: it's back to `engine.brightness` after a restart (Phase 7's
+  light entity may want that).
+
 - **6.1 Effect parameters as data.** `GET /effects` describes each effect's parameters.
 - **6.2 Effects screen.** Pick, tune, brightness, stop. Generated from 6.1.
 - **6.3 Favourites on the server.** Move them from localStorage, with a one-time import
   from the viewer.
 - **6.4 Playlists.** A list of favourites with durations and crossfades (1.x Batch 7).
+
+## Phase 6b: devices and the server's page
+
+**Built** (2026-11-22). `treemap serve` runs with no controllers configured and keeps
+running while they're off. Its page ([viewer/src/server/](viewer/src/server/), built
+with the viewer into `treemap/sim/viewer_dist/server.html`) lists the devices, adds one
+by address, and shows each with:
+- whether its controller answers (the server asks each one's `/json/info` every 5 s),
+  its WLED name, version and LED count, and a warning with a fix when WLED's count changes;
+- a **QR code** for the scan page with `?server=…&device=<id>`;
+- its LEDs **in 3D** where the scan placed them, lit with the frames the server sends it
+  (fetched about 20 times a second);
+- its **effects** (Phase 6's screen, moved from the scan page), with **Send to the
+  LEDs** off to preview an effect on the page only. A device that's off works the same
+  way: effects play on the page.
+
+Changes:
+- **API v2.** Every device endpoint is under `/api/v2/devices/{id}` (see
+  [treemap/api/device.py](treemap/api/device.py)); the server's own are `/info`,
+  `/devices`, `/effects`, `/favourites`, `/playlists` ([treemap/api/app.py](treemap/api/app.py)).
+  New: `GET /frame`, `POST /send`, `positions` in `GET /map`, `POST /map/adopt`.
+- **Each device's data** is in `data/devices/<id>/` (map and scans). A map from before
+  devices (`data/tree_map.json`) can be taken over from the device page when its LED count
+  matches. Removing a device leaves its data on disk.
+- **A controller is opened on a thread of its own** and again every 5 s after a failure,
+  so a `.local` name that doesn't resolve never holds up the effects.
+- **The virtual WLED** (`treemap sim wled`) is added like any controller, by the address
+  it prints; the server sees it's virtual (its `/json/info` product) and drives it
+  without the LEDs' gamma.
+- **The scan page** opens on one device (from the QR code, or picked from the server's
+  list) and no longer has effects. The wiring screen points at WLED's settings, not the
+  config.
+- **`treemap serve --sim` and `treemap sim view --serve` are gone**: the virtual WLED
+  replaces them. `config.yaml`'s `output` and `controllers` are now only for the 1.x
+  commands (`treemap scan`, `treemap run`, …). New: `server.scan_page`, which the QR codes
+  open and the server allows.
+- Not covered yet: a tree split over two controllers (one device per controller for now).
+
+Not yet tried with the phone or the real tree.
 
 ## Phase 7: Home Assistant
 
@@ -324,9 +388,12 @@ opened after a scan or from the connect screen. Not yet tried on the phone. Chan
 
 - **8.1 Dockerfile** and a compose example.
 - **8.2 Home Assistant add-on** (it can also find the MQTT broker for you).
-- **8.3 QR code** on the server's page and in `treemap serve`.
+- **8.3 QR code** in `treemap serve`'s terminal output (the server's page has one per
+  device since Phase 6b).
 - **8.4 PWA** manifest and service worker, so the page opens offline.
-- **8.5 The server serves its own copy of the page** over plain HTTP, for effects without
+- ~~**8.5 The server serves its own copy of the page**~~ Replaced by Phase 6b: the
+  server has its own page for devices and effects; the scan page is only hosted.
+  Was: **The server serves its own copy of the page** over plain HTTP, for effects without
   internet and as a fallback.
 - **8.6 Retire IP Webcam** (`cameras/android.py`) once the browser camera has scanned the
   real tree.
@@ -340,5 +407,5 @@ install, scan, set the front, play a playlist, automate from Home Assistant.
 ## Settled
 
 - The page is hosted on **Cloudflare Pages**.
-- **One server, one tree,** on one or more WLED controllers.
-- **No map history:** a new scan replaces the map.
+- **One server, several devices,** each one WLED controller with its own map.
+- **No map history:** a new scan replaces the device's map.

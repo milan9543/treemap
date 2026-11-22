@@ -10,6 +10,8 @@
 shape: tree
 
 # Where colours go: "sim" (browser viewer) or "wled" (DDP over UDP to the controllers below).
+# `output` and `controllers` are for the commands that drive one tree (`treemap scan`,
+# `treemap run`, ...). `treemap serve` doesn't use them: add controllers on its page.
 output: sim
 
 # WLED controllers, in the order their LEDs are numbered. host is the controller's name
@@ -62,6 +64,7 @@ server:
     - https://treemap-scan.pages.dev   # the scan page
     - https://treemap-spike.pages.dev
     - http://localhost:5173            # the scan page in development (scanapp/)
+  scan_page: https://treemap-scan.pages.dev  # what the server's QR codes open on the phone
 
 # The simulated tree (also editable in the viewer's Tree panel). null = random.
 sim:

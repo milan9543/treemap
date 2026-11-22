@@ -162,7 +162,7 @@
   async function copy() {
     if (!status) return;
     try {
-      await navigator.clipboard.writeText(`output: wled\n${status.controller}\n`);
+      await navigator.clipboard.writeText(status.controller);
       copied = true;
       setTimeout(() => (copied = false), 1500);
     } catch {
@@ -279,12 +279,11 @@
       <summary><h2>Connect treemap serve</h2></summary>
       {#if status}
         <div class="config">
-          <pre class="mono">output: wled
-{status.controller}</pre>
+          <pre class="mono">{status.controller}</pre>
           <button class="ghost" onclick={copy}>{copied ? "Copied" : "Copy"}</button>
         </div>
-        <p class="hint">Put these in <span class="mono">config.local.yaml</span>, then start
-          <span class="mono">treemap serve</span>.</p>
+        <p class="hint">On <span class="mono">treemap serve</span>'s page, add a controller with
+          this address.</p>
       {/if}
     </details>
 
@@ -311,8 +310,8 @@
       </button>
       {#if error}<p class="hint error">{error}</p>{/if}
       {#if countChanged && !busy && !error}
-        <p class="hint warn">The LED count changed: restart <span class="mono">treemap serve</span>
-          so it reads the new count.</p>
+        <p class="hint warn">The LED count changed: on <span class="mono">treemap serve</span>'s
+          page, open this device and use the new count (its map must be scanned again).</p>
       {/if}
     </details>
 

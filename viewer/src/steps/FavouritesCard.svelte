@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Pencil, Trash2 } from "@lucide/svelte";
+  import Alert from "../components/ui/Alert.svelte";
   import Card from "../components/ui/Card.svelte";
   import { runEffect } from "../lib/actions";
   import { favourites, type Favourite } from "../lib/favourites.svelte";
@@ -55,6 +56,10 @@
     <p class="muted">None yet. Run an effect, set it up how you like, then press ☆ in Now playing
       to keep it with its settings.</p>
   {/if}
+  {#if favourites.error}<Alert tone="bad">{favourites.error}</Alert>{/if}
+  <p class="muted where">{favourites.onServer
+    ? "Kept on the server, so the phone's page and playlists have them too."
+    : "Kept in this browser: the server doesn't keep favourites."}</p>
 </Card>
 
 <style>
@@ -76,4 +81,5 @@
   .name { flex: 1; margin: 4px; padding: 4px 8px; font: inherit; color: var(--text); background: var(--surface-2);
     border: 1px solid var(--accent-border); border-radius: var(--r1); }
   p { margin: 0; font-size: var(--t-sm); }
+  .where { margin-top: var(--s2); font-size: var(--t-xs); }
 </style>

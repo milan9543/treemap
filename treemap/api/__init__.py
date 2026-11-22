@@ -1,6 +1,8 @@
-"""``treemap serve``: the HTTP API the phone's scan page (and later Home Assistant) uses.
+"""``treemap serve``: the server that drives the devices, its page, and the HTTP API the
+page and the phone's scan page use.
 
-:mod:`treemap.api.app` has the endpoints, :mod:`treemap.api.http` the HTTP and CORS
+:mod:`treemap.api.app` has the server's endpoints and the device list,
+:mod:`treemap.api.device` each device's, :mod:`treemap.api.http` the HTTP and CORS
 plumbing, :mod:`treemap.api.leds` the test patterns.
 """
 

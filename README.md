@@ -91,7 +91,9 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
    Press ☆ in Now playing to keep the running effect, with its settings, under
    **Favourites**: click one to play it, ✎ to rename it, 🗑 to delete it. If you change
    a favourite's settings while it plays, **Update it** saves the new ones. Favourites
-   are kept in this browser (localStorage), so they don't follow you to another browser.
+   are kept by the server in `data/library.json`, shared with `treemap serve`'s page
+   (which also makes playlists of them). Favourites an older viewer kept in
+   the browser move there the first time it connects.
 
 The toolbar at the bottom of the 3D view switches between **Truth**, **Scanned** and
 **Compare** (`t` cycles). Compare draws a line from each LED's true position to where the
@@ -227,44 +229,56 @@ off (Sync Interfaces), switch it on. `engine.gamma` defaults to 2.2 on WLED.
 ## The server: `treemap serve`
 
 `treemap serve` is the server of treemap 2.0 (see [PLAN-2.0.md](PLAN-2.0.md)): it drives
-the LEDs and runs scans and effects, and a web page on the phone drives it over the
-local network. It listens on every interface on port 8765 (`server.port`) and prints its
-address. The API is under `/api/v1`:
+your WLED controllers, runs their scans and plays effects on them. It needs nothing in
+the config and keeps running while controllers are off. It listens on every interface
+on port 8765 (`server.port`) and prints its address; open it in a browser:
 
-| Endpoint | What it does |
-|---|---|
-| `GET /info` | API version, the LEDs and controllers, the current map, what's using the LEDs, engine timing |
-| `POST /leds` | A test pattern: `{"mode": "chase"}`, `off`, `white`, `solid` (`color`), `led` (`index`), `status` |
-| `POST /play` | Run an effect: `{"effect": "rainbow", "params": {}}` |
-| `POST /scan/start`, `/scan/stop` | Start or stop a scan (`shape`, `symbol_ms`, `brightness`, `rounds`, `camera`, all optional; `camera` makes the scan set the phone up first) |
-| `GET /scan/state` | The scan's phase, round, time left and counts; after a round, each LED's status; once measured, the phone's colours |
-| `POST /scan/frames` | Camera frames from the page (`application/octet-stream`) |
-| `POST /scan/exposure-probe` | `{"since": t}`: how many LEDs the frames taken since `t` (the frames' clock) show |
-| `POST /scan/camera-ready` | The page has set the phone's exposure; the scan goes on to the colours |
+```sh
+treemap serve                 # then open http://<this computer>:8765/
+```
 
-For example, `curl -X POST -H 'Content-Type: application/json' -d '{"mode":"chase"}'
-http://<server>:8765/api/v1/leds` does what `treemap test chase` does. Browsers may only
-use the API from the pages in `server.origins`.
+**The server's page** lists the **devices**: one per WLED controller, each with its own
+LEDs, map, scans and effects. The first time there are none.
 
-To try it on the simulated tree: `treemap serve --sim` drives the viewer's LEDs instead
-of the configured ones (on port 8766 when the viewer has 8765), and `treemap sim view
---serve` opens the viewer with its virtual phone filming for that server too. Walk round
-the tree (`f`) and start a scan through the API; the phone inset shows the round.
+- **Add a controller** by its address (`192.168.1.50`, `wled-tree.local`, or with a
+  port for the virtual WLED). Its LED count and name are read from WLED. One that's off
+  can be added too; the server picks it up when it answers. The list is kept in
+  `data/devices.json`, each device's map and scans in `data/devices/<id>/`.
+- **Open a device** to see whether it answers, its **QR code** for the scan page on the
+  phone, and its LEDs **in 3D** where the scan placed them, lit as they are now. Drag
+  to turn, scroll to zoom.
+- **Effects** play on the device: pick one and tune it, keep it as a favourite (☆), make
+  **playlists** of favourites with times and crossfades. Favourites and playlists are
+  shared by all devices (`data/library.json`). Switch **Send to the LEDs** off to
+  preview an effect on the page only; a device that's off shows effects there too.
+- A map from before devices (`data/tree_map.json`) can be taken over by a device with
+  the same LED count, from its page.
+
+The API is under `/api/v2` (see [treemap/api/app.py](treemap/api/app.py) and
+[treemap/api/device.py](treemap/api/device.py)). The server's own endpoints are
+`/info`, `/devices`, `/effects`, `/favourites` and `/playlists`; each device's are under
+`/devices/<id>`: `/leds` (test patterns), `/play`, `/brightness`, `/stop`, `/frame`,
+`/send`, `/scan/*` and `/map`. For example, `curl -X POST -H 'Content-Type:
+application/json' -d '{"mode":"chase"}' http://<server>:8765/api/v2/devices/<id>/leds`
+runs the chase. Other web pages may only use the API if they're in `server.origins`
+(the scan page is, and so is `server.scan_page`).
 
 ### The scan page
 
 The phone's side is a web page, **<https://treemap-scan.pages.dev/>** (source in
-[scanapp/](scanapp/)). `treemap serve` prints a link to it with the server's address
-filled in (`?server=http://<ip>:8765`). Open it in **Chrome on an Android phone** on the
-same Wi-Fi, and allow it to reach devices on your local network when Chrome asks. Then:
+[scanapp/](scanapp/)). It only scans. Open it from a device's **QR code** on the server's
+page, which fills in the server and the device (`?server=http://<ip>:8765&device=<id>`),
+in **Chrome on an Android phone** on the same Wi-Fi, and allow it to reach devices on
+your local network when Chrome asks. Then:
 
-1. **Connect:** the page shows the server, the LEDs and the current map. Pick **tree**
-   or **flat**.
+1. **Connect:** the page shows the server, the device and its map. Pick **tree** or
+   **flat**. Opened without a device, it lists the server's devices to pick from.
 2. **Check the wiring:** a light runs from the first LED to the last; if it doesn't run
-   in order, fix the `controllers` list. You can also light one LED by number.
+   in order, fix the LED settings in WLED. You can also light one LED by number.
 3. **Scan:** the page films with the rear camera (it picks the main lens, the one with
    continuous focus) and uploads the frames while the server runs the rounds. The page
    shows each round's progress and result; **Stop** keeps the rounds already finished.
+4. **Review:** fix missing LEDs and set which way the map faces.
 
 Each scan first sets the phone up. While the LEDs glow white, the page tries exposures
 from shortest to longest, and the server counts the LEDs in each. The page keeps the
@@ -284,10 +298,10 @@ page, the server, DDP, the "LEDs" and the camera.
 treemap sim wled              # opens the page; --new flat (or tree) starts a new layout
 ```
 
-It prints two lines for `config.local.yaml`, `output: wled` and
-`controllers: [{host: "<ip>:8780"}]`; with those, `treemap serve` drives it like real
-LEDs. It reads the LED count from its `/json/info` and sends colours over DDP to UDP 4048.
-Then scan from the phone as usual, filming the screen:
+It prints its address (`<ip>:8780`): add that on the server's page, and `treemap serve`
+drives it like real LEDs, marked as virtual. The server reads the LED count from its
+`/json/info` and sends colours over DDP to UDP 4048. Then scan from the phone as usual,
+from the device's QR code, filming the screen:
 
 - **Turn it on screen (rotate, the default):** drag to turn round it, scroll to zoom.
   **Turn by itself** (or `Space`) turns a tree slowly, once round in 10–120 s, so a
@@ -302,10 +316,10 @@ Then scan from the phone as usual, filming the screen:
   assumes one camera; filming a screen at an angle skews the picture in a way it doesn't
   model.
 - **New layouts:** the panel makes a new tree, or a flat layout in rows or a spiral, with
-  any LED count and number of strips. After changing the LED count, restart
-  `treemap serve`, which reads the count when it starts.
+  any LED count and number of strips. After changing the LED count, open the device on
+  the server's page and use the new count (its map must then be scanned again).
 
-The layout is kept in `data/virtual_wled.json`. A controller's `host` may carry a port
+The layout is kept in `data/virtual_wled.json`. A controller's address may carry a port
 like this for WLED's JSON API; DDP always goes to port 4048. macOS may ask whether
 Python may accept incoming connections: allow it, or DDP from another machine won't
 arrive.
@@ -417,12 +431,18 @@ npm --prefix viewer run dev   # viewer with hot reload; keep `treemap sim view` 
 websockets to the Python server on port 8765 (or `TREEMAP_PORT`).
 
 The scan page (`scanapp/`, Vite + Svelte 5 + TypeScript) talks to `treemap serve` across
-origins, as it does from Cloudflare Pages:
+origins, as it does from Cloudflare Pages. With the virtual WLED to scan:
 
 ```sh
-treemap serve --sim                 # on 8766 if the viewer has 8765
+treemap sim wled                    # add its address on the server's page
+treemap serve --port 8766           # 8765 if the viewer isn't running
 npm --prefix scanapp run dev        # http://localhost:5173/?server=http://127.0.0.1:8766
 ```
+
+The server's page is part of the viewer project (`viewer/server.html`,
+`viewer/src/server/`); `npm --prefix viewer run build` builds it with the viewer, and
+`treemap serve` serves it. In `npm --prefix viewer run dev`, open `/server.html`: its
+`/api/v2` calls go to `treemap serve` on `TREEMAP_SERVE_PORT` (default 8765).
 
 `localhost` counts as a secure page, so the camera works there too (on a laptop, its
 webcam). `npm --prefix scanapp run build` writes `scanapp/dist/`, which is what Cloudflare

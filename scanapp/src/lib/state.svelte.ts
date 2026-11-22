@@ -1,4 +1,4 @@
-// The page's state: which server, what it said, which screen.
+// The page's state: which server and device, what it said, which screen.
 import { Api, normaliseServer, type Info, type Shape } from "./api";
 
 export type Screen = "connect" | "wiring" | "scan" | "review";
@@ -25,8 +25,14 @@ function initialServer(): string {
   return normaliseServer(fromUrl || load("server"));
 }
 
+/** ?device= in the address (the server's QR code has it), else the last one scanned. */
+function initialDevice(): string {
+  return new URLSearchParams(location.search).get("device") || load("device");
+}
+
 export const app = $state({
   server: initialServer(),
+  device: initialDevice(),
   api: null as Api | null,
   info: null as Info | null,
   shape: "tree" as Shape,
@@ -34,14 +40,18 @@ export const app = $state({
   addRounds: false, // the next scan adds to the rounds so far (scanning parts again)
 });
 
-/** Remember the server, and put it in the address so a reload or bookmark finds it. */
+/** Remember the server and device, and put them in the address so a reload or
+ * bookmark finds them. */
 export function useServer(api: Api, info: Info): void {
   app.api = api;
   app.info = info;
   app.server = api.server;
+  app.device = api.device;
   save("server", api.server);
+  save("device", api.device);
   const url = new URL(location.href);
   url.searchParams.set("server", api.server);
+  url.searchParams.set("device", api.device);
   history.replaceState(null, "", url);
 }
 
@@ -50,14 +60,17 @@ export function useServer(api: Api, info: Info): void {
 export function disconnect(): void {
   app.api = null;
   app.info = null;
+  app.device = "";
   app.screen = "connect";
   try {
     localStorage.removeItem("server");
+    localStorage.removeItem("device");
   } catch {
     /* nothing remembered */
   }
   const url = new URL(location.href);
   url.searchParams.delete("server");
+  url.searchParams.delete("device");
   history.replaceState(null, "", url);
 }
 

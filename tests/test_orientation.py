@@ -73,7 +73,7 @@ def test_setting_the_front_from_the_page(serve):  # noqa: F811
     assert status == 200 and m["orientation"] == {"front_deg": 0.0} and m["led_status"] == "o" * 400
 
     assert call(base + "/leds", {"mode": "stripe", "front_deg": 90})[0] == 200
-    lit = out.last.max(axis=1) > 0
+    lit = out.frame.max(axis=1) > 0
     P = api._load_map().positions
     assert lit.any() and (np.degrees(np.arctan2(P[lit, 0], P[lit, 2])) > 70).all()
     assert call(base + "/leds", {"mode": "edge"})[0] == 400  # a tree has no edge
@@ -82,7 +82,7 @@ def test_setting_the_front_from_the_page(serve):  # noqa: F811
     assert status == 200 and m["orientation"] == {"front_deg": 90.0}
     assert json.loads(api.cfg.map_path.read_text())["orientation"] == {"front_deg": 90.0}
     call(base + "/leds", {"mode": "stripe"})  # now the saved front
-    assert ((out.last.max(axis=1) > 0) == lit).all()
+    assert ((out.frame.max(axis=1) > 0) == lit).all()
     assert call(base + "/map/orientation", {"rotate_deg": 90})[0] == 400
 
 
@@ -94,7 +94,7 @@ def test_a_flat_maps_edge_on_the_leds(serve):  # noqa: F811
     out = api.output
 
     assert call(base + "/leds", {"mode": "edge", "rotate_deg": 180})[0] == 200
-    white = (out.last == 200).all(axis=1)
-    red = (out.last == (255, 0, 0)).all(axis=1)
+    white = (out.frame == 200).all(axis=1)
+    red = (out.frame == (255, 0, 0)).all(axis=1)
     assert white.any() and (P[white, 1] > 0.85).all()  # turned over: the top rows are the bottom
     assert red.any() and (P[red, 0] > 1.35).all()  # and the right side the left

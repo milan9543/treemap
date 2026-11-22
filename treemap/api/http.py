@@ -10,6 +10,10 @@ sends a CORS preflight first, and only origins in ``server.origins`` get through
 * an origin in the list, or ``*`` in the list: allowed, with CORS headers
 * anything else: 403, and preflights get no CORS headers, so the browser refuses
 
+Paths outside ``/api/`` serve the server's own page (``static``): ``/`` is its HTML,
+``/assets/*`` its scripts and styles. It's served from the server's origin, so it may
+use the API without CORS.
+
 Standard library only: one phone, a request every few hundred milliseconds, and the
 engine and scans run on threads of their own anyway.
 """
@@ -18,17 +22,29 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from importlib.resources.abc import Traversable
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 log = logging.getLogger(__name__)
 
 MAX_BODY = 16 * 2**20  # bytes; a batch of 720p frames is well under 1 MB
 METHODS = "GET, POST, PUT, DELETE, OPTIONS"
+CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png",
+    ".json": "application/json", ".map": "application/json", ".woff2": "font/woff2",
+}
+NOT_BUILT = b"""<!doctype html><meta charset="utf-8"><title>treemap server</title>
+<body style="font: 15px system-ui; background: #07090d; color: #d8dee9; padding: 2em">
+<h1>The server's page isn't built yet</h1>
+<p>Run <code>npm --prefix viewer install && npm --prefix viewer run build</code> in the
+project folder, then reload this page. The API works without it.</p>"""
 
 
 class HttpError(Exception):
@@ -45,6 +61,7 @@ class Request:
     query: dict[str, list[str]]
     headers: Any  # http.client.HTTPMessage
     body: bytes = b""
+    args: dict[str, str] = field(default_factory=dict)  # from {name} parts of the route
 
     @property
     def content_type(self) -> str:
@@ -71,18 +88,40 @@ Handler = Callable[[Request], "dict[str, Any] | tuple[int, dict[str, Any]]"]
 
 @dataclass
 class Router:
+    """Routes by method and path. A path part written ``{name}`` matches any one part,
+    handed to the handler in :attr:`Request.args`; fixed paths win over those."""
+
     routes: dict[tuple[str, str], Handler] = field(default_factory=dict)
 
     def add(self, method: str, path: str, handler: Handler) -> None:
         self.routes[(method, path)] = handler
 
-    def find(self, method: str, path: str) -> Handler:
-        handler = self.routes.get((method, path))
-        if handler is None:
-            if any(p == path for _, p in self.routes):
-                raise HttpError(405, f"{method} isn't supported on {path}")
-            raise HttpError(404, f"no such endpoint: {path}")
-        return handler
+    @staticmethod
+    def _match(pattern: str, path: str) -> dict[str, str] | None:
+        want, got = pattern.split("/"), path.split("/")
+        if len(want) != len(got):
+            return None
+        args = {}
+        for w, g in zip(want, got):
+            if w.startswith("{") and w.endswith("}") and g:
+                args[w[1:-1]] = unquote(g)
+            elif w != g:
+                return None
+        return args
+
+    def find(self, method: str, path: str) -> tuple[Handler, dict[str, str]]:
+        if (method, path) in self.routes:
+            return self.routes[(method, path)], {}
+        matched = False
+        for (m, pattern), handler in self.routes.items():
+            if "{" not in pattern or (args := self._match(pattern, path)) is None:
+                continue
+            if m == method and not any(p == path for _, p in self.routes):
+                return handler, args
+            matched = True
+        if matched or any(p == path for _, p in self.routes):
+            raise HttpError(405, f"{method} isn't supported on {path}")
+        raise HttpError(404, f"no such endpoint: {path}")
 
 
 def origin_allowed(origin: str | None, host: str | None, origins: list[str]) -> bool:
@@ -94,7 +133,8 @@ def origin_allowed(origin: str | None, host: str | None, origins: list[str]) -> 
     return host is not None and origin.split("://", 1)[-1] == host
 
 
-def make_handler(router: Router, origins: list[str]) -> type[BaseHTTPRequestHandler]:
+def make_handler(router: Router, origins: list[str], static: Traversable | None = None,
+                 page: str = "index.html") -> type[BaseHTTPRequestHandler]:
     class ApiHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"  # keep-alive: the page sends a batch every 250 ms
         server_version = "treemap"
@@ -121,6 +161,29 @@ def make_handler(router: Router, origins: list[str]) -> type[BaseHTTPRequestHand
             self.end_headers()
             self.wfile.write(body)
 
+        def _file(self, path: str) -> bool:
+            """Serve the page or one of its assets; False if ``path`` isn't one."""
+            if path in ("/", "/index.html"):
+                f = static.joinpath(page) if static is not None else None
+                body = f.read_bytes() if f is not None and f.is_file() else NOT_BUILT
+                kind = CONTENT_TYPES[".html"]
+            elif path.startswith("/assets/") and static is not None:
+                name = path.removeprefix("/assets/")
+                f = static.joinpath("assets", name)
+                if not re.fullmatch(r"[\w.-]+", name) or not f.is_file():
+                    return False
+                body = f.read_bytes()
+                kind = CONTENT_TYPES.get("." + name.rsplit(".", 1)[-1], "application/octet-stream")
+            else:
+                return False
+            self.send_response(200)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache" if path == "/" else "max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
+            return True
+
         def do_OPTIONS(self) -> None:  # CORS preflight
             if not self._origin_ok():
                 self.send_response(403)
@@ -140,6 +203,8 @@ def make_handler(router: Router, origins: list[str]) -> type[BaseHTTPRequestHand
 
         def _handle(self) -> None:
             url = urlsplit(self.path)
+            if self.command == "GET" and not url.path.startswith("/api/") and self._file(url.path):
+                return
             length = int(self.headers.get("Content-Length") or 0)
             try:
                 if length > MAX_BODY:
@@ -149,8 +214,9 @@ def make_handler(router: Router, origins: list[str]) -> type[BaseHTTPRequestHand
                 if not self._origin_ok():
                     raise HttpError(403, f"origin {self.headers.get('Origin')} isn't allowed; "
                                          "add it to server.origins in the config")
-                handler = router.find(self.command, url.path)
-                req = Request(self.command, url.path, parse_qs(url.query), self.headers, body)
+                handler, args = router.find(self.command, url.path)
+                req = Request(self.command, url.path, parse_qs(url.query), self.headers, body,
+                              args)
                 result = handler(req)
                 status, payload = result if isinstance(result, tuple) else (200, result)
             except HttpError as e:
@@ -168,8 +234,10 @@ def make_handler(router: Router, origins: list[str]) -> type[BaseHTTPRequestHand
 class HttpServer:
     """Serves ``router`` on ``host:port`` from a background thread."""
 
-    def __init__(self, router: Router, host: str, port: int, origins: list[str]) -> None:
-        self._httpd = ThreadingHTTPServer((host, port), make_handler(router, origins))
+    def __init__(self, router: Router, host: str, port: int, origins: list[str],
+                 static: Traversable | None = None, page: str = "index.html") -> None:
+        self._httpd = ThreadingHTTPServer((host, port),
+                                          make_handler(router, origins, static, page))
         self._httpd.daemon_threads = True
         self._thread: threading.Thread | None = None
 

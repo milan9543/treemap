@@ -69,3 +69,51 @@ def test_serve_drives_it_like_real_wled(device):
         out.close()
     assert device.last_frame == frame.tobytes()
     assert device.status()["live"] and device.status()["source"] == "127.0.0.1"
+
+
+def test_the_server_adds_it_by_address(device, tmp_path):
+    """No controllers in the config: it's added by address, its LED count and that it's
+    virtual are read from it, effects reach it, and the page can keep them to itself."""
+    from tests.test_api import call
+    from treemap.api import Api, HttpServer
+
+    cfg = config_from_dict({})
+    cfg.base_dir = tmp_path
+    api = Api(cfg, open_leds=lambda r, c: WledOutput(c.led_count, c.controller_layout(),
+                                                      port=device.ddp_port))
+    server = HttpServer(api.router, "127.0.0.1", 0, []).start()
+    root = f"http://127.0.0.1:{server.port}/api/v2"
+    try:
+        assert call(root + "/devices")[2]["devices"] == []
+        status, _, d = call(root + "/devices", {"host": f"http://127.0.0.1:{device.port}/"})
+        assert status == 201, d
+        assert (d["led_count"], d["virtual"], d["status"]["alive"]) == (120, True, True)
+        assert d["name"] == "treemap virtual WLED" and d["gamma"] == 1.0
+        assert call(root + "/devices", {"host": f"127.0.0.1:{device.port}"})[0] == 409
+
+        base = f"{root}/devices/{d['id']}"
+        assert call(base + "/play", {"effect": "solid", "params": {"color": "red"}})[0] == 200
+        deadline = time.monotonic() + 5
+        while device.last_frame is None or not (device.last_frame[0] > 100
+                                                 and device.last_frame[1:3] == b"\0\0"):
+            assert time.monotonic() < deadline, device.last_frame
+            time.sleep(0.05)
+        frame = call(base + "/frame")[2]
+        assert frame["seq"] > 0 and frame["rgb"]
+
+        assert call(base + "/send", {"on": False})[0] == 200  # the page only: LEDs dark
+        time.sleep(0.3)
+        assert not any(device.last_frame)
+        assert call(base + "/frame")[2]["seq"] > frame["seq"]  # the page still gets them
+
+        # A controller that's off: on the list, not answering, nothing to drive yet.
+        status, _, off = call(root + "/devices", {"host": "127.0.0.1:9", "name": "Garden"})
+        assert status == 201 and off["led_count"] is None and off["status"]["alive"] is False
+        assert call(f"{root}/devices/{off['id']}/play", {"effect": "solid"})[0] == 409
+        assert [x["name"] for x in call(root + "/devices")[2]["devices"]] == [
+            "treemap virtual WLED", "Garden"]
+        assert call(f"{root}/devices/{off['id']}", method="DELETE")[0] == 200
+        assert len(Api(cfg, check_s=60).devices) == 1  # kept in data/devices.json
+    finally:
+        server.stop()
+        api.close()

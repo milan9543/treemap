@@ -114,6 +114,8 @@ class ServerConfig:
     port: int = 8765
     # Web pages allowed to use the API from a browser (CORS). "*" allows any.
     origins: list[str] = field(default_factory=lambda: list(DEFAULT_ORIGINS))
+    # The scan page the server's QR codes open (on the phone).
+    scan_page: str = SCAN_PAGE
 
 
 @dataclass
@@ -135,6 +137,9 @@ class Config:
     base_dir: Path = field(default_factory=Path.cwd, repr=False, compare=False)
     # Not a config key: the file this was loaded from, if any.
     source: Path | None = field(default=None, repr=False, compare=False)
+    # Not a config key: where one device's map and scans are kept (`treemap serve` drives
+    # several); None: data/ as for the single tree of the other commands.
+    device_dir: Path | None = field(default=None, repr=False, compare=False)
     # Not a config key: the simulated tree's LED count, keyed by its file's mtime and size.
     _tree_count: tuple[Any, int] | None = field(default=None, init=False, repr=False,
                                                 compare=False)
@@ -186,7 +191,7 @@ class Config:
 
     @property
     def scan_dir(self) -> Path:
-        return self.resolve(Path("data") / "scans" / self.scan.profile)
+        return (self.device_dir or self.resolve("data")) / "scans" / self.scan.profile
 
     @property
     def colours_path(self) -> Path:
@@ -209,7 +214,12 @@ class Config:
     @property
     def map_path(self) -> Path:
         """The reconstructed map written by ``treemap reconstruct``."""
-        return self.resolve(Path("data") / "tree_map.json")
+        return (self.device_dir or self.resolve("data")) / "tree_map.json"
+
+    @property
+    def library_path(self) -> Path:
+        """Favourite effects and playlists (see :mod:`treemap.library`)."""
+        return self.resolve(Path("data") / "library.json")
 
     @property
     def gamma(self) -> float:
@@ -234,7 +244,7 @@ class Config:
     def to_dict(self) -> dict[str, Any]:
         """The config as plain data, without the non-key fields."""
         d = asdict(self)
-        for key in ("base_dir", "source", "_tree_count", "_layout"):
+        for key in ("base_dir", "source", "device_dir", "_tree_count", "_layout"):
             d.pop(key)
         return d
 
@@ -267,6 +277,9 @@ class Config:
             if o != "*" and not (isinstance(o, str) and ORIGIN_RE.fullmatch(o)):
                 raise ConfigError(f"server.origins: {o!r} isn't an origin like "
                                   "https://example.com or http://localhost:5173 (no path)")
+        if not (isinstance(srv.scan_page, str) and re.fullmatch(r"https?://\S+", srv.scan_page)):
+            raise ConfigError("server.scan_page must be the scan page's address, like "
+                              f"{SCAN_PAGE}")
 
         _check_choice("camera.type", self.camera.type, CAMERA_TYPES)
         if self.camera.url is not None and not isinstance(self.camera.url, str):

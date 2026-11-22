@@ -149,8 +149,9 @@ class VirtualWled:
         self.last_frame = None
 
     @property
-    def controller_line(self) -> str:
-        return f"controllers: [{{host: \"{self.address}:{self.port}\"}}]"
+    def controller_address(self) -> str:
+        """What to add on `treemap serve`'s page."""
+        return f"{self.address}:{self.port}"
 
     # -- WLED's JSON API ----------------------------------------------------------------
 
@@ -179,7 +180,7 @@ class VirtualWled:
 
     def status(self) -> dict[str, Any]:
         return {"type": "status", "led_count": self.led_count, "live": self._live,
-                "fps": self.fps(), "source": self.source, "controller": self.controller_line,
+                "fps": self.fps(), "source": self.source, "controller": self.controller_address,
                 "shape": "flat" if isinstance(self.layout, SimFlat) else "tree"}
 
     # -- HTTP ---------------------------------------------------------------------------

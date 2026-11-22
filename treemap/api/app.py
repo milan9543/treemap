@@ -1,425 +1,395 @@
-"""The ``/api/v1`` endpoints of ``treemap serve``.
+"""The ``/api/v2`` endpoints of ``treemap serve``.
 
-======  ================  ==============================================================
-GET     /info             API and server version, the LEDs and controllers, the current
-                          map, what's using the LEDs, engine timing, frames received
-POST    /leds             a test pattern (see :mod:`treemap.api.leds`)
-POST    /play             ``{"effect", "params"}``: run an effect
-POST    /scan/start       ``{"shape", "symbol_ms", "brightness", "rounds", "camera",
-                          "add"}``, all optional; ``camera`` names the phone, see below;
-                          ``add`` keeps the rounds so far, to scan parts again
-POST    /scan/stop        stop the scan; finished rounds are kept
-GET     /scan/state       phase, round, time left, LEDs identified, per-status counts;
-                          after a round (and once the scan is done or stopped, if it
-                          made a map), ``led_status``: one letter per LED (o ok,
-                          i interpolated, f failed); once measured, ``colours``
-POST    /scan/frames      a batch of camera frames (see :mod:`treemap.cameras.http`)
-POST    /scan/exposure-probe
-                          ``{"since", "frames"}``: how many LEDs the frames taken at
-                          ``since`` or later (the phone's clock) show, median per frame,
-                          and ``lit``, the share of the picture as bright as an LED
-POST    /scan/camera-ready
-                          ``{"message", "settings"}``: the phone has set its exposure
-POST    /scan/next        ``{"finish": false}``: the user is in place, start the next
-                          round (or, with ``finish``, end the scan here)
-GET     /map              the current map: shape, counts, ``orientation``, ``led_status``
-                          (letters as above), the LEDs whose readings are ignored
-POST    /map/orientation  ``{"front_deg"}`` (tree) or ``{"rotate_deg", "mirror"}``
-                          (flat): which way the map faces (see
-                          :mod:`treemap.mapping.model`); every effect follows it
-POST    /map/interpolate  ``{"index", "interpolate": true}``: ignore an LED's readings
-                          (it's in the wrong place) and fill it from its neighbours, or
-                          (false) use them again; answers once the map is solved again
-======  ================  ==============================================================
+The server drives any number of **devices**: WLED controllers added on its page by
+address (see :mod:`treemap.devices`). It starts with none, needs none configured, and
+keeps running while they're off. Each device has its own LEDs, map, scans, effects and
+test patterns, under ``/devices/{id}`` (see :mod:`treemap.api.device`); favourites and
+playlists are shared by all.
 
-A scan started with ``camera`` (the page sends the phone's model and camera label) sets
-the phone up first: after the countdown, in phase ``exposure``, the LEDs light up at
-the scan's brightness, each in one of the code's colours, while the page tries exposures,
-asking ``exposure-probe`` how many LEDs each one shows, and keeps the shortest that shows
-nearly all (so the dimmest colour too); it then calls
-``camera-ready``. In phase ``colours`` the server measures how the phone sees each colour
-of the code and keeps that per phone (``colours`` in the state: the share read right
-per colour, whether all pass, tips). Then the rounds start. After each round (but the
-last) the LEDs show its result until the page calls ``next`` (``waiting`` in the state),
-so the user can walk to the red parts first.
+======  ======================  ========================================================
+GET     /info                   API and server version, the server's address on the
+                                LAN (``url``) and the scan page's (``scan_page``), for
+                                QR codes
+GET     /devices                ``{"devices": [...]}``, each as ``GET /devices/{id}``
+POST    /devices                ``{"host", "name"?, "led_count"?}``: add a controller.
+                                Its LED count (and name) is read from its WLED; one
+                                that doesn't answer yet is added without, unless given
+GET     /devices/{id}           the device: ``id``, ``name``, ``host``, ``virtual``,
+                                ``status`` (``alive``, ``checked_s_ago``, ``wled``: its
+                                name, version and LED count, ``error``), and once its
+                                LED count is known everything its LEDs are doing
+PUT     /devices/{id}           ``{"name"?, "led_count"?}``: rename it, or take WLED's
+                                LED count after it changed (its map must then be scanned
+                                again)
+DELETE  /devices/{id}           take it off the list (its map and scans stay on disk)
+...     /devices/{id}/...       the device's own endpoints: :mod:`treemap.api.device`
+GET     /effects                the effects to pick from, with their parameters (name,
+                                kind, default, range, choices) to build controls from;
+                                ``needs_map``: it places light by the mapped positions
+GET     /favourites             ``{"favourites": [...]}`` (see :mod:`treemap.library`)
+POST    /favourites             ``{"name", "effect", "params"}``: keep a favourite
+POST    /favourites/import      ``{"favourites": [...]}``: add favourites kept
+                                elsewhere, skipping those already here
+PUT     /favourites/{id}        ``{"name"?, "params"?}``: rename it, or new settings
+DELETE  /favourites/{id}        delete it (and take it out of every playlist)
+GET     /playlists              ``{"playlists": [...]}``
+POST    /playlists              ``{"name", "items", "crossfade_s", "shuffle"}``
+PUT     /playlists/{id}         replace a playlist's name, items, crossfade and shuffle
+DELETE  /playlists/{id}         delete it
+======  ======================  ========================================================
 
-One thing drives the LEDs at a time. A test pattern or an effect replaces whichever of
-the two was showing; a scan stops both, and neither can start until the scan is over.
+A device whose controller has never answered has no LED count yet, so it has none of its
+own endpoints (they answer 409) until it does: the status check reads it then.
 """
 
 from __future__ import annotations
 
+import copy
+import logging
 import socket
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import asdict
-from datetime import datetime, timezone
 from typing import Any
 
-import numpy as np
-
 from treemap import __version__
+from treemap.api.device import DeviceApi
 from treemap.api.http import HttpError, Request, Router
-from treemap.api.leds import CommandError, LedCommands
-from treemap.cameras.http import BatchError, HttpCamera
-from treemap.scan.track import MIN_LEVEL, find_blobs
-from treemap.workflow import WorkflowError
-from treemap.config import Config
-from treemap.effects import EffectContext, ParamError
-from treemap.engine import Engine
-from treemap.jobs import JobRejected, Jobs
-from treemap.mapping.model import TreeMap
-from treemap.mapping.source import MapSource
+from treemap.config import Config, Controller
+from treemap.devices import (
+    MAX_DEVICES,
+    MAX_LEDS,
+    VIRTUAL_PRODUCT,
+    DeviceError,
+    DeviceOutput,
+    DeviceRecord,
+    DeviceStore,
+    normalise_host,
+    probe,
+    wled_led_count,
+)
+from treemap.effects import describe_effects
+from treemap.library import Library, LibraryError
 from treemap.outputs.base import LedOutput
 
-API_VERSION = 1
-PREFIX = "/api/v1"
-CAMERA_ID = "browser"  # whose measured colours a scan from the page reads by
-STATUS_LETTERS = {"ok": "o", "interpolated": "i", "failed": "f"}
-NEXT_TIMEOUT_S = 900.0  # between rounds, for the user; then the scan finishes there
-READY_TIMEOUT_S = 300.0  # for the page to set the phone's exposure (the user may pick one)
-PROBE_TIMEOUT_S = 3.0  # for the frames an exposure probe asks for to arrive
-SOLVE_TIMEOUT_S = 300.0  # for the map to be solved again after a fix
+log = logging.getLogger(__name__)
+
+API_VERSION = 2
+PREFIX = "/api/v2"
+CHECK_S = 5.0  # how often each controller is asked whether it's there
+# Effect groups that aren't light shows: test patterns (POST /leds) and scan views
+NOT_SHOWS = {"Diagnostics", "Mapping"}
+
+# Opens a device's LEDs on its controller; tests swap in a recorder.
+OpenLeds = Callable[[DeviceRecord, Config], LedOutput]
 
 
-class SharedOutput(LedOutput):
-    """The server's one output, handed to the engine and the scan: they close what
-    they're given when they finish, but the real output stays open."""
+def open_wled(record: DeviceRecord, cfg: Config) -> LedOutput:
+    from treemap.outputs.wled import WledOutput
 
-    def __init__(self, output: LedOutput) -> None:
-        super().__init__(output.led_count)
-        self.output = output
+    return WledOutput(cfg.led_count, cfg.controller_layout())
 
-    def _show(self, colors: np.ndarray) -> None:
-        self.output.show(colors)
+
+class Device:
+    """A device on the list: its record, whether it answers, and (once its LED count is
+    known) its :class:`DeviceApi`."""
+
+    def __init__(self, record: DeviceRecord) -> None:
+        self.record = record
+        self.api: DeviceApi | None = None
+        self.alive: bool | None = None  # None: not asked yet
+        self.checked_at = 0.0
+        self.wled: dict[str, Any] | None = None  # its name, version and LED count
+        self.error: str | None = None
+
+    def status(self) -> dict[str, Any]:
+        return {"alive": self.alive,
+                "checked_s_ago": round(time.monotonic() - self.checked_at, 1)
+                if self.checked_at else None,
+                "wled": self.wled, "error": self.error}
 
 
 class Api:
-    def __init__(self, cfg: Config, output: LedOutput, camera: HttpCamera | None = None) -> None:
+    def __init__(self, cfg: Config, open_leds: OpenLeds = open_wled, url: str | None = None,
+                 check_s: float = CHECK_S) -> None:
         self.cfg = cfg
-        self.output = output
-        self.n = output.led_count
-        self.camera = camera or HttpCamera()
-        shared = lambda: SharedOutput(output)  # noqa: E731
-        fps = cfg.engine.fps
-        self.engine = Engine(
-            shared, EffectContext(n=self.n, fps=fps, tree_map=MapSource(cfg.map_path)),
-            fps=fps, brightness=cfg.engine.brightness, crossfade_s=cfg.engine.crossfade,
-            gamma=cfg.gamma,
-        )
-        self.leds = LedCommands(output, self._map_for_leds)
-        self._scan_started: datetime | None = None  # when the latest scan started (UTC)
-        self._ready = threading.Event()  # the page has set the phone's exposure
-        self._ready_info: dict[str, Any] = {}
-        self._probing = threading.Lock()
-        self._go = threading.Condition()
-        self._go_round = 0  # the user has asked for rounds up to this one
-        self._finish = False
-        self.jobs = Jobs(cfg, shared, stop_effects=self._free_leds, camera=self.camera,
-                         camera_id=CAMERA_ID, camera_ready=self._wait_camera_ready,
-                         next_round=self._wait_next_round)
+        self.open_leds = open_leds
+        self.url = url  # the server's address on the LAN
+        self.library = Library(cfg.library_path, MAX_LEDS)
+        self.store = DeviceStore(cfg.resolve("data/devices.json"))
+        self._lock = threading.RLock()
+        self.devices: dict[str, Device] = {}
+        for record in self.store.load():
+            self.devices[record.id] = device = Device(record)
+            self._start(device)
+        self._stop = threading.Event()
+        self._checker = threading.Thread(target=self._check_loop, args=(check_s,),
+                                         name="device-check", daemon=True)
+        self._checker.start()
+
         self.router = Router()
         for method, path, handler in (
             ("GET", "/info", self.info),
-            ("POST", "/leds", self.post_leds),
-            ("POST", "/play", self.play),
-            ("POST", "/scan/start", self.scan_start),
-            ("POST", "/scan/stop", self.scan_stop),
-            ("GET", "/scan/state", self.scan_state),
-            ("POST", "/scan/frames", self.scan_frames),
-            ("POST", "/scan/exposure-probe", self.exposure_probe),
-            ("POST", "/scan/camera-ready", self.camera_ready),
-            ("POST", "/scan/next", self.scan_next),
-            ("GET", "/map", self.get_map),
-            ("POST", "/map/orientation", self.map_orientation),
-            ("POST", "/map/interpolate", self.map_interpolate),
+            ("GET", "/devices", self.list_devices),
+            ("POST", "/devices", self.add_device),
+            ("GET", "/devices/{id}", self.get_device),
+            ("PUT", "/devices/{id}", self.put_device),
+            ("DELETE", "/devices/{id}", self.delete_device),
+            ("GET", "/effects", self.effects),
+            ("GET", "/favourites", self.favourites),
+            ("POST", "/favourites", self.add_favourite),
+            ("POST", "/favourites/import", self.import_favourites),
+            ("PUT", "/favourites/{id}", self.put_favourite),
+            ("DELETE", "/favourites/{id}", self.delete_favourite),
+            ("GET", "/playlists", self.playlists),
+            ("POST", "/playlists", self.add_playlist),
+            ("PUT", "/playlists/{id}", self.put_playlist),
+            ("DELETE", "/playlists/{id}", self.delete_playlist),
         ):
             self.router.add(method, PREFIX + path, handler)
+        for method, path, name in DeviceApi.ROUTES:
+            self.router.add(method, PREFIX + "/devices/{id}" + path, self._on_device(name))
 
-    # -- who drives the LEDs ------------------------------------------------------------
+    # -- devices ------------------------------------------------------------------------
 
-    def _free_leds(self) -> None:
-        self.leds.stop()
-        self.engine.stop()
+    def _device_config(self, record: DeviceRecord) -> Config:
+        """The server's config, for this device's LEDs and with its own data folder."""
+        cfg = copy.copy(self.cfg)
+        cfg.output = "wled"
+        cfg.controllers = [Controller(host=record.host, start=0, count=record.led_count)]
+        cfg._layout = None
+        cfg.device_dir = self.cfg.resolve("data") / "devices" / record.id
+        if record.virtual:
+            cfg.engine = copy.copy(cfg.engine)
+            cfg.engine.gamma = 1.0  # a screen: it applies its own gamma
+        return cfg
 
-    def _refuse_while_scanning(self) -> None:
-        if self.jobs.uses_leds:
-            raise HttpError(409, "a scan is using the LEDs; stop it first")
+    def _start(self, device: Device) -> None:
+        """Give the device its LEDs, engine and scans, once its LED count is known."""
+        record = device.record
+        if record.led_count is None or device.api is not None:
+            return
+        cfg = self._device_config(record)
+        output = DeviceOutput(record.led_count, lambda: self.open_leds(record, cfg))
+        device.api = DeviceApi(record, cfg, output, self.library,
+                               legacy_dir=self.cfg.resolve("data"))
 
-    def _load_map(self) -> TreeMap | None:
-        try:
-            return TreeMap.load(self.cfg.map_path)
-        except (OSError, ValueError, KeyError):
-            return None
+    def _device(self, req: Request) -> Device:
+        device = self.devices.get(req.args["id"])
+        if device is None:
+            raise HttpError(404, f"there's no device {req.args['id']!r}")
+        return device
 
-    def _map_for_leds(self) -> TreeMap:
-        tree_map = self._load_map()
-        if tree_map is None or tree_map.led_count != self.n:
-            raise CommandError("there's no map for these LEDs yet: scan first")
-        return tree_map
+    def _on_device(self, name: str) -> Callable[[Request], Any]:
+        def handler(req: Request) -> Any:
+            device = self._device(req)
+            if device.api is None:
+                raise HttpError(409, f"{device.record.name} hasn't answered yet, so its LED "
+                                     "count isn't known: switch it on")
+            return getattr(device.api, name)(req)
+        return handler
 
-    def _map_or_404(self) -> TreeMap:
-        tree_map = self._load_map()
-        if tree_map is None:
-            raise HttpError(404, "there's no map yet: scan first")
-        if tree_map.led_count != self.n:
-            raise HttpError(409, f"the map is for {tree_map.led_count} LEDs, not "
-                                 f"{self.n}: scan again")
-        return tree_map
-
-    @staticmethod
-    def _orientation(tree_map: TreeMap) -> dict[str, Any]:
-        """The map's orientation, with the defaults filled in."""
-        default = {"rotate_deg": 0, "mirror": False} if tree_map.shape == "flat" else {"front_deg": 0.0}
-        return {**default, **(tree_map.orientation or {})}
-
-    # -- endpoints ----------------------------------------------------------------------
-
-    def info(self, req: Request) -> dict[str, Any]:
-        cfg = self.cfg
-        tree_map = self._load_map()
-        busy = ("scan" if self.jobs.uses_leds else "effect" if self.engine.running
-                else "leds" if self.leds.running else None)
-        last = self.camera.last_push
-        return {
-            "api": API_VERSION,
-            "server": f"treemap {__version__}",
-            "shape": cfg.shape,
-            "output": cfg.output,
-            "led_count": self.n,
-            "controllers": [asdict(c) for c in cfg.controller_layout()]
-            if cfg.output == "wled" else [],
-            "map": None if tree_map is None else {
-                "led_count": tree_map.led_count,
-                "fits": tree_map.led_count == self.n,
-                "shape": tree_map.shape,
-                "created": tree_map.meta.get("created"),
-                "counts": tree_map.counts(),
-                "orientation": self._orientation(tree_map),
-            },
-            "busy": busy,
-            "leds": self.leds.mode,
-            "effect": self.engine.state()["running"],
-            "timing": self.engine.timing(),
-            "camera": {"frames": self.camera.received,
-                       "last_s_ago": round(time.monotonic() - last, 1) if last else None},
-        }
-
-    def post_leds(self, req: Request) -> dict[str, Any]:
-        self._refuse_while_scanning()
-        try:
-            return self.leds.run(req.json(), before=self.engine.stop)
-        except CommandError as e:
-            raise HttpError(400, str(e)) from None
-
-    def play(self, req: Request) -> dict[str, Any]:
-        self._refuse_while_scanning()
-        body = req.json()
-        params = body.get("params") or {}
-        if not isinstance(body.get("effect"), str) or not isinstance(params, dict):
-            raise HttpError(400, 'send {"effect": name, "params": {...}}')
-        self.leds.stop()
-        try:
-            self.engine.start(body["effect"], params)
-        except KeyError as e:
-            raise HttpError(404, e.args[0] if e.args else "no such effect") from None
-        except ParamError as e:
-            raise HttpError(400, str(e)) from None
-        self.leds.mode = None
-        return self.engine.state()
-
-    def scan_start(self, req: Request) -> tuple[int, dict[str, Any]]:
-        body = req.json()
-        unknown = set(body) - {"shape", "symbol_ms", "brightness", "rounds", "camera", "add"}
-        if unknown:
-            raise HttpError(400, f"unknown setting(s): {', '.join(sorted(unknown))}")
-        if self.jobs.busy:
-            raise HttpError(409, f"a {self.jobs.state()['kind']} is already running")
-        started = datetime.now(timezone.utc)
-        self._ready.clear()
-        with self._go:
-            self._go_round, self._finish = 0, False
-        try:
-            job = self.jobs.start("scan", body)
-        except JobRejected as e:
-            raise HttpError(400, str(e)) from None
-        self._scan_started = started
-        self.leds.mode = None
-        return 202, {"id": job}
-
-    def scan_stop(self, req: Request) -> dict[str, Any]:
-        self.jobs.cancel()
-        return {"stopping": self.jobs.busy}
-
-    def scan_state(self, req: Request) -> dict[str, Any]:
-        st = self.jobs.state()
-        progress = st.get("progress") or {}
-        out = {
-            "id": st["id"],
-            "status": st["status"] if st.get("kind") in (None, "scan") else "idle",
-            "message": st.get("message") or "",
-            "error": st.get("error"),
-            **{k: progress.get(k) for k in ("phase", "round", "remaining", "frames",
-                                            "identified", "counts")},
-            "waiting": bool(progress.get("waiting")) and st["status"] == "running",
-            "frames_received": self.camera.received,
-            "colours": st.get("colours"),
-        }
-        if progress.get("message"):
-            out["message"] = progress["message"]
-        if progress.get("phase") == "status" or st["status"] in ("done", "cancelled"):
-            tree_map = self._load_map()
-            if tree_map is not None and tree_map.led_count == self.n and self._made_by_scan(tree_map):
-                out["led_status"] = "".join(STATUS_LETTERS.get(str(s), "f") for s in tree_map.status)
-                out["counts"] = tree_map.counts()
+    def _describe(self, device: Device) -> dict[str, Any]:
+        r = device.record
+        out = {"id": r.id, "name": r.name, "host": r.host, "virtual": r.virtual,
+               "led_count": r.led_count, "status": device.status()}
+        if device.api is not None:
+            out.update(device.api.summary())
+            out["error"] = device.api.output.error
         return out
 
-    def _made_by_scan(self, tree_map: TreeMap) -> bool:
-        """Whether the map came from the latest scan (not one from before it, which a scan
-        that found nothing leaves in place)."""
-        if self._scan_started is None:
-            return False
-        try:
-            created = datetime.fromisoformat(tree_map.meta["created"])
-            # `created` is to the second, and a scan takes seconds before its first map
-            return created > self._scan_started.replace(microsecond=0)
-        except (KeyError, TypeError, ValueError):
-            return False
+    def list_devices(self, req: Request) -> dict[str, Any]:
+        return {"devices": [self._describe(d) for d in list(self.devices.values())]}
 
-    def scan_frames(self, req: Request) -> dict[str, Any]:
-        if req.content_type != "application/octet-stream":
-            raise HttpError(415, "send frames as application/octet-stream")
+    def get_device(self, req: Request) -> dict[str, Any]:
+        return self._describe(self._device(req))
+
+    def add_device(self, req: Request) -> tuple[int, dict[str, Any]]:
+        body = req.json()
+        unknown = set(body) - {"host", "name", "led_count"}
+        if unknown:
+            raise HttpError(400, f"unknown field(s): {', '.join(sorted(unknown))}")
         try:
-            return {"frames": self.camera.push(req.body)}
-        except BatchError as e:
+            host = normalise_host(body.get("host"))
+            name = _name(body.get("name"))
+            count = _led_count(body.get("led_count"))
+        except DeviceError as e:
+            raise HttpError(400, str(e)) from None
+        with self._lock:
+            if any(d.record.host == host for d in self.devices.values()):
+                raise HttpError(409, f"{host} is on the list already")
+            if len(self.devices) >= MAX_DEVICES:
+                raise HttpError(409, f"there are {MAX_DEVICES} devices already")
+        device = Device(DeviceRecord(id="", name=name or host, host=host, led_count=count))
+        self._check(device)  # reads its LED count, name and whether it's virtual
+        if device.wled is not None and not name:
+            device.record.name = device.wled["name"] or host
+        with self._lock:
+            device.record.id = DeviceStore.new_id(set(self.devices))
+            self.devices[device.record.id] = device
+            self._save()
+            self._start(device)
+        return 201, self._describe(device)
+
+    def put_device(self, req: Request) -> dict[str, Any]:
+        device = self._device(req)
+        body = req.json()
+        unknown = set(body) - {"name", "led_count"}
+        if unknown:
+            raise HttpError(400, f"unknown field(s): {', '.join(sorted(unknown))}")
+        try:
+            name = _name(body.get("name")) if "name" in body else None
+            count = _led_count(body.get("led_count")) if "led_count" in body else None
+        except DeviceError as e:
+            raise HttpError(400, str(e)) from None
+        with self._lock:
+            if name:
+                device.record.name = name
+            if count is not None and count != device.record.led_count:
+                if device.api is not None and device.api.jobs.busy:
+                    raise HttpError(409, "a scan is running on it; stop it first")
+                self._close(device)
+                device.record.led_count = count
+                self._start(device)
+            self._save()
+        return self._describe(device)
+
+    def delete_device(self, req: Request) -> dict[str, Any]:
+        device = self._device(req)
+        with self._lock:
+            self.devices.pop(device.record.id, None)
+            self._save()
+        self._close(device)
+        return {"deleted": device.record.id}
+
+    def _save(self) -> None:
+        self.store.save([d.record for d in self.devices.values()])
+
+    @staticmethod
+    def _close(device: Device) -> None:
+        api, device.api = device.api, None
+        if api is not None:
+            api.close()
+
+    # -- is it there? -------------------------------------------------------------------
+
+    def _check(self, device: Device) -> None:
+        """Ask the controller for its WLED info: is it there, how many LEDs, is it the
+        virtual one. A device without an LED count takes WLED's."""
+        try:
+            info = probe(device.record.host)
+            count = wled_led_count(info)
+        except (OSError, ValueError) as e:
+            device.alive, device.error = False, _reason(e)
+        else:
+            device.alive, device.error = True, None
+            device.wled = {"name": str(info.get("name") or ""), "version": info.get("ver"),
+                           "led_count": count}
+            virtual = info.get("product") == VIRTUAL_PRODUCT
+            if device.record.led_count is None or device.record.virtual != virtual:
+                device.record.virtual = virtual
+                if device.record.led_count is None:
+                    device.record.led_count = count
+                with self._lock:
+                    if device.record.id in self.devices:
+                        self._save()
+                        self._start(device)
+        device.checked_at = time.monotonic()
+
+    def _check_loop(self, every_s: float) -> None:
+        while True:
+            threads = [threading.Thread(target=self._check, args=(d,), daemon=True)
+                       for d in list(self.devices.values())]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(every_s)
+            if self._stop.wait(every_s):
+                return
+
+    # -- global endpoints ---------------------------------------------------------------
+
+    def info(self, req: Request) -> dict[str, Any]:
+        return {"api": API_VERSION, "server": f"treemap {__version__}", "url": self.url,
+                "scan_page": self.cfg.server.scan_page, "devices": len(self.devices)}
+
+    def effects(self, req: Request) -> dict[str, Any]:
+        return {"effects": [e for e in describe_effects(MAX_LEDS) if e["group"] not in NOT_SHOWS]}
+
+    def _library(self, change: Callable[[], Any]) -> Any:
+        try:
+            return change()
+        except KeyError as e:
+            raise HttpError(404, e.args[0] if e.args else "not found") from None
+        except LibraryError as e:
             raise HttpError(400, str(e)) from None
 
-    # -- the map ----------------------------------------------------------------------
+    def favourites(self, req: Request) -> dict[str, Any]:
+        return {"favourites": self.library.favourites()}
 
-    def get_map(self, req: Request) -> dict[str, Any]:
-        m = self._map_or_404()
-        return {
-            "shape": m.shape,
-            "led_count": m.led_count,
-            "created": m.meta.get("created"),
-            "rounds": m.meta.get("rounds"),
-            "counts": m.counts(),
-            "orientation": self._orientation(m),
-            "led_status": "".join(STATUS_LETTERS.get(str(s), "f") for s in m.status),
-            "ignored": sorted(m.meta.get("forced_interpolate", [])),
-        }
+    def add_favourite(self, req: Request) -> tuple[int, dict[str, Any]]:
+        return 201, self._library(lambda: self.library.add_favourite(req.json()))
 
-    def map_orientation(self, req: Request) -> dict[str, Any]:
-        if self.jobs.busy:
-            raise HttpError(409, f"a {self.jobs.state()['kind']} is changing the map; wait for it")
-        try:
-            self._map_or_404().turned(req.json()).save(self.cfg.map_path)
-        except ValueError as e:
-            raise HttpError(400, str(e)) from None
-        return self.get_map(req)
+    def import_favourites(self, req: Request) -> dict[str, Any]:
+        result = self._library(lambda: self.library.import_favourites(req.json().get("favourites")))
+        return {**result, "favourites": self.library.favourites()}
 
-    def map_interpolate(self, req: Request) -> dict[str, Any]:
-        body = req.json()
-        interpolate = body.get("interpolate", True)
-        if not isinstance(interpolate, bool):
-            raise HttpError(400, "interpolate must be true or false")
-        self._map_or_404()
-        try:
-            self.jobs.start("interpolate" if interpolate else "measure", {"index": body.get("index")})
-        except JobRejected as e:
-            raise HttpError(409 if self.jobs.busy else 400, str(e)) from None
-        if not self.jobs.wait(SOLVE_TIMEOUT_S):
-            raise HttpError(504, "solving the map is taking too long; check it later")
-        st = self.jobs.state()
-        if st["status"] != "done":
-            raise HttpError(500, st.get("error") or "the map couldn't be solved again")
-        return self.get_map(req)
+    def put_favourite(self, req: Request) -> dict[str, Any]:
+        return self._library(lambda: self.library.update_favourite(req.args["id"], req.json()))
 
-    # -- setting the phone up ---------------------------------------------------------
+    def delete_favourite(self, req: Request) -> dict[str, Any]:
+        self._library(lambda: self.library.remove_favourite(req.args["id"]))
+        return {"deleted": req.args["id"]}
 
-    def _waiting_for_camera(self) -> bool:
-        return self.jobs.uses_leds and (self.jobs.state().get("progress") or {}).get(
-            "phase") == "exposure"
+    def playlists(self, req: Request) -> dict[str, Any]:
+        return {"playlists": self.library.playlists()}
 
-    def exposure_probe(self, req: Request) -> dict[str, Any]:
-        body = req.json()
-        since, count = body.get("since"), body.get("frames", 6)
-        if isinstance(since, bool) or not isinstance(since, (int, float)):
-            raise HttpError(400, "since must be a time in seconds on the phone's clock")
-        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 24:
-            raise HttpError(400, "frames must be a whole number 1-24")
-        if self.jobs.uses_leds and not self._waiting_for_camera():
-            raise HttpError(409, "the scan is reading the camera")
-        if not self._probing.acquire(blocking=False):
-            raise HttpError(409, "another probe is running")
-        try:
-            frames = self.camera.frames_since(float(since), count, PROBE_TIMEOUT_S)
-            counts = [len(find_blobs(f.image)) for f in frames]
-            lit = [float(np.mean(f.image.max(axis=2) >= MIN_LEVEL)) for f in frames]
-        finally:
-            self._probing.release()
-        return {"frames": len(frames), "leds": int(np.median(counts)) if counts else 0,
-                "lit": round(float(np.median(lit)), 4) if lit else 0.0}
+    def add_playlist(self, req: Request) -> tuple[int, dict[str, Any]]:
+        return 201, self._library(lambda: self.library.add_playlist(req.json()))
 
-    def camera_ready(self, req: Request) -> dict[str, Any]:
-        body = req.json()
-        message, settings = body.get("message"), body.get("settings") or {}
-        if message is not None and (not isinstance(message, str) or len(message) > 1000):
-            raise HttpError(400, "message must be text")
-        if not isinstance(settings, dict):
-            raise HttpError(400, "settings must be an object")
-        if not self._waiting_for_camera():
-            raise HttpError(409, "no scan is waiting for the camera")
-        self._ready_info = {"message": message, "settings": settings}
-        self._ready.set()
-        return {"ok": True}
+    def put_playlist(self, req: Request) -> dict[str, Any]:
+        return self._library(lambda: self.library.put_playlist(req.args["id"], req.json()))
 
-    def _wait_camera_ready(self, check_cancel: Callable[[], None]) -> dict[str, Any]:
-        end = time.monotonic() + READY_TIMEOUT_S
-        while not self._ready.wait(0.25):
-            check_cancel()
-            if time.monotonic() > end:
-                raise WorkflowError("the phone didn't set its exposure: is the scan page "
-                                    "still open?")
-        return self._ready_info
-
-    def scan_next(self, req: Request) -> dict[str, Any]:
-        finish = req.json().get("finish", False)
-        if not isinstance(finish, bool):
-            raise HttpError(400, "finish must be true or false")
-        progress = self.jobs.state().get("progress") or {}
-        if not (self.jobs.uses_leds and progress.get("waiting")):
-            raise HttpError(409, "the scan isn't waiting between rounds")
-        with self._go:
-            self._go_round = max(self._go_round, int(progress.get("round") or 0) + 1)
-            self._finish = finish
-            self._go.notify_all()
-        return {"round": self._go_round, "finish": finish}
-
-    def _wait_next_round(self, round_: int, check_cancel: Callable[[], None]) -> bool:
-        end = time.monotonic() + NEXT_TIMEOUT_S
-        with self._go:
-            while self._go_round < round_ + 1:
-                self._go.wait(0.25)
-                check_cancel()
-                if time.monotonic() > end:
-                    return False  # nobody came back: keep what's done
-            return not self._finish
+    def delete_playlist(self, req: Request) -> dict[str, Any]:
+        self._library(lambda: self.library.remove_playlist(req.args["id"]))
+        return {"deleted": req.args["id"]}
 
     # -- lifecycle ----------------------------------------------------------------------
 
     def close(self) -> None:
-        """Stop the scan (keeping finished rounds), the effect and the test pattern, turn
-        the LEDs off and close the output."""
-        if self.jobs.busy:
-            self.jobs.cancel()
-            self.jobs.wait(10)
-        self._free_leds()
-        try:
-            self.output.off()
-        finally:
-            self.output.close()
+        """Stop every device's scan (keeping finished rounds), effect and test pattern,
+        and turn its LEDs off."""
+        self._stop.set()
+        for device in list(self.devices.values()):
+            self._close(device)
+
+
+def _name(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value.strip()) > 60:
+        raise DeviceError("name must be text, up to 60 characters")
+    return value.strip() or None
+
+
+def _led_count(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_LEDS:
+        raise DeviceError(f"led_count must be a whole number 1-{MAX_LEDS}")
+    return value
+
+
+def _reason(e: Exception) -> str:
+    reason = getattr(e, "reason", None)  # urllib wraps the socket's error
+    text = str(reason if reason is not None else e)
+    if isinstance(reason, socket.timeout) or "timed out" in text:
+        return "no answer"
+    if isinstance(reason, socket.gaierror):
+        return "the name doesn't resolve"
+    if isinstance(reason, ConnectionRefusedError):
+        return "connection refused"
+    return text
 
 
 def lan_address() -> str:

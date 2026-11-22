@@ -259,3 +259,30 @@ def test_viewer_is_told_who_is_sending(server):
         b.close()
         recv_until(viewer, lambda m: isinstance(m, str) and '"producers": 1' in m)
         a.close()
+
+
+def test_viewer_favourites_live_on_the_server(tmp_path):
+    """The viewer's favourites are kept in the file `treemap serve` uses: it imports its
+    own once, and sees changes made by the other server."""
+    from treemap.config import config_from_dict
+    from treemap.library import Library
+
+    cfg = config_from_dict({})
+    cfg.base_dir = tmp_path
+    tree_path = tmp_path / "sim_tree.json"
+    generate_tree(SMALL, seed=3).save(tree_path)
+    srv = SimServer(tree_path=tree_path, map_path=cfg.map_path, port=0, poll_s=0.05,
+                    led_count=10, cfg=cfg)
+    favourites = lambda m: isinstance(m, str) and json.loads(m)["type"] == "favourites"  # noqa: E731
+    with ServerThread(srv), connect(f"ws://127.0.0.1:{srv.port}/ws/viewer") as ws:
+        assert json.loads(recv_until(ws, favourites))["list"] == []
+        ws.send(json.dumps({"type": "favourites.import", "list": [
+            {"id": "f1", "name": "Mine", "effect": "rainbow", "params": {"speed": 2}}]}))
+        listed = json.loads(recv_until(ws, favourites))["list"]
+        assert [f["id"] for f in listed] == ["f1"] and listed[0]["params"]["speed"] == 2
+        ws.send(json.dumps({"type": "favourites.update", "id": "f1", "name": "Renamed"}))
+        assert json.loads(recv_until(ws, favourites))["list"][0]["name"] == "Renamed"
+
+        Library(cfg.library_path, 10).add_favourite({"name": "From the phone", "effect": "solid"})
+        listed = json.loads(recv_until(ws, favourites))["list"]
+        assert [f["name"] for f in listed] == ["Renamed", "From the phone"]

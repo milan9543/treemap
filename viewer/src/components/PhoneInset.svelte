@@ -39,7 +39,6 @@
 
   const streaming = $derived(app.scanners > 0);
   const identified = $derived(app.detections?.blobs.filter((b) => b[2] >= 0).length ?? 0);
-  const serve = $derived(app.serveScanning ? app.serve : null);
 </script>
 
 <figure class="phone">
@@ -47,10 +46,7 @@
     <canvas bind:this={overlay} width={PHONE_W} height={PHONE_H}></canvas>
   </div>
   <figcaption>
-    {#if serve}
-      <span><span class="rec">●</span> Phone · {app.phoneFps} fps to serve</span>
-      <span>{serve.round ? `round ${serve.round}, ` : ""}{serve.phase ?? ""}{serve.identified ? `, ${serve.identified} identified` : ""}</span>
-    {:else if streaming}
+    {#if streaming}
       <span><span class="rec">●</span> Phone · sending {app.phoneFps} fps</span>
       <span>{identified} identified in view</span>
     {:else}

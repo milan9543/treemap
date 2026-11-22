@@ -17,7 +17,7 @@ import typer
 import yaml
 
 from treemap import __version__
-from treemap.config import CONFIG_ENV_VAR, SCAN_PAGE, Config, ConfigError, load_config
+from treemap.config import CONFIG_ENV_VAR, Config, ConfigError, load_config
 
 app = typer.Typer(
     help="Map the 3D positions of WLED Christmas tree LEDs and run position-aware effects.",
@@ -230,9 +230,6 @@ def sim_view(
     ctx: typer.Context,
     browser: Annotated[bool, typer.Option(help="Open the viewer in a browser.")] = True,
     port: Annotated[int | None, typer.Option(help="Port. Default: sim.port.")] = None,
-    serve: Annotated[bool, typer.Option(
-        "--serve", help="Have the virtual phone film for `treemap serve --sim` too, so a "
-        "scan started through its API sees the simulated tree.")] = False,
 ) -> None:
     """Serve the 3D viewer. Leave it running; other commands stream colours to it."""
     from treemap.sim.server import SimServer
@@ -264,8 +261,6 @@ def sim_view(
 
     def ready(s: SimServer) -> None:
         url = s.url
-        if serve:
-            url += f"?serve=http://127.0.0.1:{_sim_serve_port(cfg)}"
         typer.secho(f"Viewer running at {url}  (Ctrl-C to stop)", fg=typer.colors.GREEN)
         if browser:
             webbrowser.open(url)
@@ -333,9 +328,10 @@ def sim_wled(
         typer.secho(f"Virtual WLED: {d.led_count} LEDs ({d_shape}) at {url}  (Ctrl-C to stop)",
                     fg=typer.colors.GREEN)
         typer.echo(f"  DDP on UDP {d.ddp_port}; WLED's JSON API at http://{d.address}:{d.port}/json")
-        typer.echo("  For `treemap serve`, in config.local.yaml:")
-        typer.secho(f"    output: wled\n    {d.controller_line}", bold=True)
-        typer.echo("  Restart `treemap serve` after changing the layout's LED count.")
+        typer.echo("  To drive it, add this address on `treemap serve`'s page:")
+        typer.secho(f"    {d.controller_address}", bold=True)
+        typer.echo("  After changing the layout's LED count, the server's page offers to use "
+                   "the new count.")
         if browser:
             webbrowser.open(url)
 
@@ -536,70 +532,50 @@ def _timing_line(t: dict) -> str:
 # -- server ---------------------------------------------------------------------------
 
 
-def _sim_serve_port(cfg: Config) -> int:
-    """`treemap serve --sim`'s port: server.port, unless the viewer has it."""
-    return cfg.server.port if cfg.server.port != cfg.sim.port else cfg.sim.port + 1
-
-
 @app.command("serve")
 def serve(
     ctx: typer.Context,
     port: Annotated[int | None, typer.Option(help="Port. Default: server.port.")] = None,
     host: Annotated[str | None, typer.Option(
         help="Address to listen on. Default: server.host (every interface).")] = None,
-    sim: Annotated[bool, typer.Option(
-        "--sim", help="Drive the simulated tree in the viewer instead of the configured "
-        "LEDs, for development. Open the viewer with `treemap sim view --serve` to scan "
-        "it through the API.")] = False,
+    browser: Annotated[bool, typer.Option(help="Open the server's page in a browser.")] = False,
 ) -> None:
-    """Serve the API the phone's scan page uses, on the local network.
+    """Run the server: it drives your WLED controllers, scans them with the phone's scan
+    page, and plays effects on them.
 
-    The LEDs, the scan and the effects all run here; the page on the phone drives them.
-    Leave it running.
+    Open its page to add controllers (by address: no config needed) and to get a QR code
+    that opens the scan page on the phone. Leave it running.
     """
-    import copy
     import signal
     import time
 
     from treemap.api import Api, HttpServer, lan_address
-    from treemap.outputs import OutputError, create_output
+    from treemap.sim.server import viewer_dir
 
-    if sim:
-        cfg = copy.copy(ctx.obj.raw_config)  # the controllers aren't needed
-        cfg.output, cfg.shape = "sim", "tree"  # the simulator only grows trees
-        # the viewer's page may use the API: its virtual phone uploads the frames
-        viewer = f"http://{cfg.sim.host}:{cfg.sim.port}"
-        cfg.server = copy.copy(cfg.server)
-        cfg.server.origins = [*cfg.server.origins, viewer, viewer.replace("127.0.0.1", "localhost")]
-        port = port or _sim_serve_port(cfg)
-    else:
-        cfg = ctx.obj.config
-        port = port or cfg.server.port
+    cfg = ctx.obj.config
+    port = port or cfg.server.port
     host = host or cfg.server.host
-    if cfg.output == "sim" and port == cfg.sim.port:
-        fail(f"the simulator's viewer uses port {port}; serve on another one "
-             f"(--port {port + 1}, or server.port in the config)", code=2)
+    where = "127.0.0.1" if host in ("127.0.0.1", "localhost") else lan_address()
+    api = Api(cfg)
+    origins = list(cfg.server.origins)
+    scan_origin = "/".join(cfg.server.scan_page.split("/")[:3])  # the QR codes' page
+    if "*" not in origins and scan_origin not in origins:
+        origins.append(scan_origin)
     try:
-        output = create_output(cfg, source="treemap serve", mirror=False)
-    except OutputError as e:
-        fail(str(e))
-    api = Api(cfg, output)
-    try:
-        server = HttpServer(api.router, host, port, cfg.server.origins).start()
+        server = HttpServer(api.router, host, port, origins,
+                            static=viewer_dir(), page="server.html").start()
     except OSError as e:
         api.close()
         fail(f"Can't listen on {host}:{port}: {e.strerror or e}")
-    where = "127.0.0.1" if host in ("127.0.0.1", "localhost") else lan_address()
     base = f"http://{where}:{server.port}"
+    api.url = base
     typer.secho(f"treemap serve on {base}  (Ctrl-C to stop)", fg=typer.colors.GREEN)
-    typer.echo(f"  {api.n} LEDs on {_output_label(cfg)}; API at {base}/api/v1/info")
-    typer.echo(f"  pages allowed to use it: {', '.join(cfg.server.origins) or 'none'}")
-    if SCAN_PAGE in cfg.server.origins or "*" in cfg.server.origins:
-        typer.secho(f"  scan page (Chrome on an Android phone): {SCAN_PAGE}/?server={base}",
-                    bold=True)
-    if sim:
-        typer.echo("  to scan the simulated tree through the API: `treemap sim view --serve`, "
-                   "walk round it (f), then POST /api/v1/scan/start")
+    names = ", ".join(d.record.name for d in api.devices.values())
+    typer.echo(f"  devices: {names or 'none yet: add your WLED controllers on the page'}")
+    typer.secho(f"  the server's page: {base}/", bold=True)
+    typer.echo(f"  pages allowed to use it: {', '.join(origins)}")
+    if browser:
+        webbrowser.open(f"http://127.0.0.1:{server.port}/")
 
     def terminate(signum, frame) -> None:  # e.g. `docker stop`: shut down as for Ctrl-C
         raise KeyboardInterrupt

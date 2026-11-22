@@ -1,22 +1,39 @@
-// The `treemap serve` API (treemap/api/app.py), reached over the LAN from this HTTPS page.
+// The `treemap serve` API (treemap/api/app.py and device.py), reached over the LAN from
+// this HTTPS page. The page scans one device: the server's QR code opens it with
+// ?server=…&device=<id>, and every call but the server's info goes to that device.
 //
 // Chrome lets an HTTPS page fetch a plain-HTTP private address once the user grants the
 // local network permission. Every fetch must come from the page itself: a worker's
 // fetches to the LAN fail even with the permission (spike 1.1).
 
-export const API_VERSION = 1;
+export const API_VERSION = 2;
 export const DEFAULT_PORT = 8765;
 
 export type Shape = "tree" | "flat";
 export type Counts = { ok: number; interpolated: number; failed: number };
 
-export interface Info {
+/** GET /info: the server itself. */
+export interface ServerInfo {
   api: number;
   server: string;
-  shape: Shape;
-  output: string;
+  devices: number;
+}
+
+/** A device as GET /devices lists it: one WLED controller and its LEDs. */
+export interface DeviceSummary {
+  id: string;
+  name: string;
+  host: string;
+  virtual: boolean;
+  led_count: number | null; // null until its WLED has answered
+  status: { alive: boolean | null; error: string | null };
+  map?: Info["map"];
+}
+
+/** GET /devices/{id}: the device being scanned. */
+export interface Info extends DeviceSummary {
   led_count: number;
-  controllers: { host: string; start: number; count: number; reverse: boolean }[];
+  shape: Shape;
   map: null | {
     led_count: number; fits: boolean; shape: Shape; created: string | null; counts: Counts;
     orientation: Orientation;
@@ -103,16 +120,27 @@ function needsAddressSpace(server: string): boolean {
   }
 }
 
+/** The server's own endpoints, before a device is picked. */
+export function serverApi(server: string) {
+  const api = new Api(server, "");
+  return {
+    info: () => api.call<ServerInfo>("GET", "/info", undefined, true),
+    devices: () => api.call<{ devices: DeviceSummary[] }>("GET", "/devices", undefined, true),
+  };
+}
+
 export class Api {
+  readonly root: string;
   readonly base: string;
   private extra: Record<string, string>;
 
-  constructor(readonly server: string) {
-    this.base = server + "/api/v1";
+  constructor(readonly server: string, readonly device: string) {
+    this.root = server + "/api/v2";
+    this.base = `${this.root}/devices/${encodeURIComponent(device)}`;
     this.extra = needsAddressSpace(server) ? { targetAddressSpace: "local" } : {};
   }
 
-  async call<T>(method: string, path: string, body?: unknown | ArrayBuffer): Promise<T> {
+  async call<T>(method: string, path: string, body?: unknown | ArrayBuffer, root = false): Promise<T> {
     const init: RequestInit = { method, cache: "no-store", ...this.extra };
     if (body instanceof ArrayBuffer) {
       init.body = body;
@@ -123,7 +151,7 @@ export class Api {
     }
     let res: Response;
     try {
-      res = await fetch(this.base + path, init);
+      res = await fetch((root ? this.root : this.base) + path, init);
     } catch {
       throw new ApiError(0, `Can't reach the server at ${this.server}.`);
     }
@@ -140,7 +168,8 @@ export class Api {
     return data as T;
   }
 
-  info = () => this.call<Info>("GET", "/info");
+  /** The device (and everything its LEDs are doing). */
+  info = () => this.call<Info>("GET", "");
   leds = (cmd: Record<string, unknown>) => this.call<{ mode: string; seconds?: number }>("POST", "/leds", cmd);
   /** `add` keeps the rounds so far and adds to them (to scan parts again). */
   scanStart = (settings: { shape: Shape; rounds?: number; camera?: string; add?: boolean }) =>

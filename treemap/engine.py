@@ -65,6 +65,7 @@ class Engine:
         self._previous: Effect | None = None
         self._previous_t0 = 0.0
         self._fade_t0 = 0.0
+        self._fade_s = crossfade_s
 
     # -- control (any thread) ---------------------------------------------------------
 
@@ -76,14 +77,18 @@ class Engine:
     def effect(self) -> Effect | None:
         return self._current
 
-    def start(self, name: str, params: dict[str, Any] | None = None) -> Effect:
-        """Run an effect, crossfading from the current one. Raises KeyError/ParamError."""
+    def start(self, name: str, params: dict[str, Any] | None = None,
+              crossfade_s: float | None = None) -> Effect:
+        """Run an effect, crossfading from the current one (for ``crossfade_s``, or the
+        engine's own crossfade). Raises KeyError/ParamError."""
         effect = create_effect(name, self.ctx, params)
+        fade = self.crossfade_s if crossfade_s is None else crossfade_s
         now = time.perf_counter()
         with self._lock:
-            if self._current is not None and self.crossfade_s > 0:
+            if self._current is not None and fade > 0:
                 self._previous, self._previous_t0 = self._current, self._current_t0
                 self._fade_t0 = now
+                self._fade_s = fade
             else:
                 self._previous = None
             self._current, self._current_t0 = effect, now
@@ -214,7 +219,7 @@ class Engine:
                 return None
             frame = np.asarray(cur.render(now - self._current_t0), dtype=np.float32)
             if self._previous is not None:
-                a = (now - self._fade_t0) / self.crossfade_s
+                a = (now - self._fade_t0) / self._fade_s
                 if a >= 1:
                     self._previous = None
                 else:

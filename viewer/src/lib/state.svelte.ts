@@ -54,8 +54,6 @@ class App {
   walking = $state(false);
   locked = $state(false); // pointer captured for mouse look
   phoneFps = $state(0);
-  // A `treemap serve` the phone also films for (?serve=http://host:port), and its scan.
-  serve = $state.raw<ServeScan | null>(null);
   hover = $state<{ x: number; y: number; text: string } | null>(null);
 
   get sim(): boolean {
@@ -70,20 +68,7 @@ class App {
   get jobsAvailable(): boolean {
     return !!this.config?.jobs;
   }
-  get serveScanning(): boolean {
-    return this.serve?.status === "running";
-  }
 }
-
-/** `treemap serve`'s GET /api/v1/scan/state, or why it couldn't be read. */
-export type ServeScan = {
-  status: string; // idle | running | done | error | cancelled | unreachable
-  phase?: string | null;
-  round?: number | null;
-  remaining?: number | null;
-  identified?: number | null;
-  error?: string | null;
-};
 
 export const app = new App();
 

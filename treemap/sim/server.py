@@ -26,9 +26,17 @@ Websockets:
                    {"type": "effect.brightness", "value"}
                    {"type": "effect.map", "map"}  (scanned | truth: positions for 3D effects)
                    {"type": "effect.stop"}
+                   {"type": "favourites.add", "favourite"}  (with its own id)
+                   {"type": "favourites.update", "id", "name"?, "params"?}
+                   {"type": "favourites.remove", "id"}
+                 With a config, browsers also get ``{"type": "favourites", "list"}`` on
+                 connecting and whenever they change (here or by ``treemap serve``, which
+                 keeps them in the same file: see :mod:`treemap.library`), and may send
+                 {"type": "favourites.import", "list"}: the ones they kept themselves.
                    {"type": "job.start", "job", "params"}  (see treemap.jobs)
                    {"type": "job.cancel"}
-                 Rejected requests get {"type": "effect.error" | "job.rejected", "error"}.
+                 Rejected requests get {"type": "effect.error" | "job.rejected" |
+                 "favourites.error", "error"}.
 (The websockets HTTP layer only accepts GET, hence commands go over the websocket.)
 
 The effects engine runs in this process and sends its frames through an ordinary
@@ -61,6 +69,7 @@ from treemap.config import Config
 from treemap.effects import ParamError, describe_effects
 from treemap.engine import Engine
 from treemap.jobs import JobRejected, Jobs
+from treemap.library import Library, LibraryError
 from treemap.sim.tree import (
     HEIGHT_RANGE,
     LIMITS,
@@ -119,6 +128,7 @@ class SimServer:
     last_frame: bytes | None = field(default=None, init=False)
     engine: Engine | None = field(default=None, init=False)
     jobs: Jobs | None = field(default=None, init=False)
+    library: Library | None = field(default=None, init=False)  # favourites, with a config
     _generate_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _loop: asyncio.AbstractEventLoop | None = field(default=None, init=False)
 
@@ -219,6 +229,8 @@ class SimServer:
                 await ws.send(json.dumps(self._engine_state()))
             if self.jobs is not None:
                 await ws.send(json.dumps({"type": "job", **self.jobs.state()}))
+            if self.library is not None:
+                await ws.send(json.dumps(self._favourites()))
             if self.last_frame is not None:
                 await ws.send(self.last_frame)
             async for message in ws:
@@ -241,6 +253,39 @@ class SimServer:
             await self._effect_command(ws, kind, msg)
         elif isinstance(kind, str) and kind.startswith("job."):
             await self._job_command(ws, kind, msg)
+        elif isinstance(kind, str) and kind.startswith("favourites."):
+            await self._favourites_command(ws, kind, msg)
+
+    def _favourites(self) -> dict:
+        try:
+            return {"type": "favourites", "list": self.library.favourites()}
+        except OSError as e:
+            return {"type": "favourites.error", "error": str(e)}
+
+    async def _favourites_command(self, ws: ServerConnection, kind: str, msg: dict) -> None:
+        lib = self.library
+        try:
+            if lib is None:
+                raise LibraryError("favourites aren't kept on this server")
+            if kind == "favourites.add":
+                await asyncio.to_thread(lib.add_favourite, msg.get("favourite"))
+            elif kind == "favourites.update":
+                body = {k: msg[k] for k in ("name", "params") if k in msg}
+                await asyncio.to_thread(lib.update_favourite, str(msg.get("id")), body)
+            elif kind == "favourites.remove":
+                await asyncio.to_thread(lib.remove_favourite, str(msg.get("id")))
+            elif kind == "favourites.import":
+                result = await asyncio.to_thread(lib.import_favourites, msg.get("list"))
+                log.info("imported %d favourites from the viewer (%d skipped)",
+                         result["added"], result["skipped"])
+            else:
+                raise LibraryError(f"unknown command {kind!r}")
+        except (KeyError, LibraryError, OSError) as e:
+            message = e.args[0] if isinstance(e, KeyError) and e.args else str(e)
+            with contextlib.suppress(ConnectionClosed):
+                await ws.send(json.dumps({"type": "favourites.error", "error": message}))
+        if lib is not None:
+            self._broadcast_json(self._favourites())  # also puts back what a refusal changed
 
     async def _job_command(self, ws: ServerConnection, kind: str, msg: dict) -> None:
         jobs = self.jobs
@@ -397,6 +442,8 @@ class SimServer:
     async def _watch_files(self) -> None:
         """Tell viewers to reload when the tree or map are (re)written."""
         stamps = {"tree": lambda: _mtime(self.tree_path), "map": lambda: _mtime(self.map_path)}
+        if self.library is not None:  # treemap serve may change them too
+            stamps["favourites"] = lambda: _mtime(self.library.path)
         seen = {what: stamp() for what, stamp in stamps.items()}
         while True:
             await asyncio.sleep(self.poll_s)
@@ -404,6 +451,9 @@ class SimServer:
                 new = stamp()
                 if new != seen[what]:
                     seen[what] = new
+                    if what == "favourites":
+                        self._broadcast_json(self._favourites())
+                        continue
                     log.info("%s changed, reloading viewers", what)
                     if what == "tree":
                         await self._tree_changed()
@@ -426,6 +476,8 @@ class SimServer:
         ) as server:
             self.port = server.sockets[0].getsockname()[1]  # resolves port 0
             self._loop = asyncio.get_running_loop()
+            if self.cfg is not None:
+                self.library = Library(self.cfg.library_path, self.current_led_count)
             if self.make_engine is not None:
                 self.engine = self.make_engine(self)
                 self.engine.on_change = self._engine_changed

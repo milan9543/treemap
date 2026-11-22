@@ -93,13 +93,14 @@
         </div>
         {#if answer === "no"}
           <div class="note warn">
-            The order comes from <span class="mono">controllers</span> in the server's config.
+            The order is the controller's, set in WLED.
             <ul>
-              <li>Several controllers: list them in the order the strips run.</li>
-              <li>A strip runs the wrong way: give its controller <span class="mono">reverse: true</span>.</li>
-              <li>The light stops early or skips a strip: check that controller's LED count in WLED.</li>
+              <li>The light stops early or skips a strip: check the LED count in WLED's LED
+                Preferences. If it changed, the server's page offers to use the new count.</li>
+              <li>A strip runs the wrong way or out of order: fix it in WLED's LED Preferences
+                (each output's start, length and reverse).</li>
             </ul>
-            Restart <span class="mono">treemap serve</span> after a change, then run the light again.
+            Then run the light again.
           </div>
         {/if}
       </div>

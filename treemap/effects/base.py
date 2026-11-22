@@ -135,6 +135,7 @@ class Effect:
     group: ClassVar[str] = "Classic"
     description: ClassVar[str] = ""
     params: ClassVar[tuple[Param, ...]] = ()
+    needs_map: ClassVar[bool] = False  # it places light by the LEDs' mapped positions
 
     def __init__(self, ctx: EffectContext, **params: Any) -> None:
         self.ctx = ctx
@@ -172,8 +173,27 @@ class Effect:
             "label": cls.label,
             "group": cls.group,
             "description": cls.description,
+            "needs_map": cls.needs_map,
             "params": [p.describe(n) for p in cls.params],
         }
+
+    @classmethod
+    def check_params(cls, values: dict[str, Any], n: int, lenient: bool = False) -> dict[str, Any]:
+        """Every parameter's value as JSON (``values`` checked, defaults for the rest),
+        without starting the effect. Raises ParamError, or with ``lenient`` drops the
+        values that aren't valid (settings kept by an older version)."""
+        by_name = {p.name: p for p in cls.params}
+        out = {p.name: p.to_json(p.default) for p in cls.params}
+        for key, value in values.items():
+            try:
+                if key not in by_name:
+                    raise ParamError(f"{cls.name} has no parameter {key!r} "
+                                     f"(parameters: {', '.join(by_name) or 'none'})")
+                out[key] = by_name[key].to_json(by_name[key].parse(value, n))
+            except ParamError:
+                if not lenient:
+                    raise
+        return out
 
     # -- helpers for subclasses -------------------------------------------------------
 
@@ -187,6 +207,8 @@ class Effect:
 class MapEffect(Effect):
     """An effect that needs the LED positions. Starting one without a map is a
     ParamError; if the map goes away while it runs, it renders black."""
+
+    needs_map = True
 
     def setup(self) -> None:
         if self.tree_map() is None:

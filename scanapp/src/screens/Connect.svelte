@@ -1,28 +1,52 @@
 <script lang="ts">
+  // Step 0: reach the server, and the device to scan on it. The server's QR code opens
+  // this page with both; without a device, pick one from the server's list.
   import { onMount } from "svelte";
-  import { Api, ApiError, API_VERSION, normaliseServer, type Info, type Shape } from "../lib/api";
+  import {
+    Api, ApiError, API_VERSION, normaliseServer, serverApi, type DeviceSummary, type Shape,
+  } from "../lib/api";
   import { app, browserProblem, disconnect, useServer } from "../lib/state.svelte";
 
   let address = $state(app.server.replace(/^http:\/\//, ""));
   let connecting = $state(false);
+  let serverName = $state<string | null>(null);
+  let devices = $state<DeviceSummary[] | null>(null); // to pick from, when none is chosen
   let problem = $state<{ kind: "unreachable" | "origin" | "version" | "other"; text: string } | null>(null);
   const browser = browserProblem();
 
-  async function connect() {
+  async function connect(device = app.device) {
     const server = normaliseServer(address);
     if (!server) return;
     connecting = true;
     problem = null;
-    const api = new Api(server);
     try {
-      const info: Info = await api.info();
-      if (info.api !== API_VERSION) {
-        problem = { kind: "version", text: `The server speaks version ${info.api} of the API and ` +
-          `this page version ${API_VERSION}. Update ${info.api < API_VERSION ? "the server" : "this page (reload it)"}.` };
+      const srv = serverApi(server);
+      const about = await srv.info();
+      if (about.api !== API_VERSION) {
+        problem = { kind: "version", text: `The server speaks version ${about.api} of the API and ` +
+          `this page version ${API_VERSION}. Update ${about.api < API_VERSION ? "the server" : "this page (reload it)"}.` };
         return;
       }
-      if (app.info?.led_count === undefined) app.shape = info.shape;
-      useServer(api, info);
+      serverName = about.server;
+      if (device) {
+        try {
+          const api = new Api(server, device);
+          const info = await api.info();
+          if (info.led_count === null) {
+            problem = { kind: "other", text: `${info.name} hasn't answered the server yet, so its LED ` +
+              "count isn't known. Switch it on and try again." };
+            return;
+          }
+          if (app.info?.id !== info.id) app.shape = info.map?.shape ?? info.shape;
+          useServer(api, info);
+          devices = null;
+          return;
+        } catch (e) {
+          if ((e as ApiError).status !== 404) throw e;
+          app.device = ""; // gone from the server: pick another
+        }
+      }
+      devices = (await srv.devices()).devices;
     } catch (e) {
       const err = e as ApiError;
       problem = err.status === 0 ? { kind: "unreachable", text: err.message }
@@ -35,6 +59,12 @@
 
   function pick(shape: Shape) {
     app.shape = shape;
+  }
+
+  function otherDevice() {
+    app.api = null;
+    app.info = null;
+    void connect("");
   }
 
   const date = (iso: string | null) =>
@@ -50,7 +80,8 @@
 <main class="page">
   <header class="head">
     <h1>treemap</h1>
-    <p class="muted">Map where every LED is, by filming them with this phone.</p>
+    <p class="muted">Map where every LED is, by filming them with this phone. Open this page
+      from the QR code on the server's page.</p>
   </header>
 
   {#if browser}
@@ -69,7 +100,8 @@
     </form>
     {#if !info && !problem}
       <p class="small muted hint">The address <span class="mono">treemap serve</span> prints when it
-        starts. Chrome asks to let this page reach devices on your network: allow it.</p>
+        starts (the server's QR code fills it in). Chrome asks to let this page reach devices on
+        your network: allow it.</p>
     {/if}
 
     {#if problem?.kind === "unreachable"}
@@ -95,16 +127,14 @@
       <dl class="facts connected">
         <dt>Server</dt>
         <dd class="server">
-          <span>{info.server} <span class="ok-dot" aria-hidden="true"></span></span>
+          <span>{serverName ?? app.server} <span class="ok-dot" aria-hidden="true"></span></span>
           <button type="button" class="small-btn" onclick={() => { problem = null; disconnect(); }}>
             Disconnect</button>
         </dd>
-        <dt>LEDs</dt>
-        <dd class="num">{info.led_count}
-          {#if info.controllers.length}
-            on {info.controllers.length === 1 ? info.controllers[0].host
-              : `${info.controllers.length} controllers`}
-          {:else if info.output === "sim"}(simulated){/if}
+        <dt>Device</dt>
+        <dd class="server">
+          <span><strong>{info.name}</strong> <span class="muted">{info.virtual ? "virtual, " : ""}{info.led_count} LEDs</span></span>
+          <button type="button" class="small-btn" onclick={otherDevice}>Other</button>
         </dd>
         <dt>Map</dt>
         <dd>
@@ -120,8 +150,31 @@
           {/if}
         </dd>
       </dl>
+      {#if info.status.alive === false}
+        <div class="note warn">The server can't reach this controller ({info.status.error ?? "no answer"}).
+          Switch it on: the scan lights its LEDs.</div>
+      {/if}
     {/if}
   </section>
+
+  {#if devices && !info}
+    <section class="card">
+      <h2>Which device?</h2>
+      {#if devices.length}
+        <div class="stack">
+          {#each devices as d (d.id)}
+            <button class="device" disabled={d.led_count === null || connecting} onclick={() => connect(d.id)}>
+              <strong>{d.name}</strong>
+              <span class="small muted">{d.host} · {d.led_count === null ? "not answering yet" : `${d.led_count} LEDs`}{d.virtual ? " · virtual" : ""}</span>
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <p class="small muted">The server has no devices yet. Add your WLED controller on the server's
+          page first, then scan its QR code.</p>
+      {/if}
+    </section>
+  {/if}
 
   {#if info}
     {#if info.busy === "scan"}
@@ -175,4 +228,5 @@
   .server { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .small-btn { min-height: 32px; padding: 4px 12px; font-size: 13px; }
   .wide { width: 100%; }
+  .device { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; font-weight: 500; }
 </style>
