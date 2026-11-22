@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from tests.walk_render import flat_layout, flat_round
-from treemap.scan.free import build_map
+from treemap.scan.free import add_round, build_map
 
 
 def align_2d(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -39,3 +39,16 @@ def test_flat_scan_places_leds_to_within_a_centimetre(moving):
     m = tree_map.positions[ok, :2] - tree_map.positions[ok, :2].mean(axis=0)
     t = true_2d[ok] - true_2d[ok].mean(axis=0)
     assert np.corrcoef(m[:, 0], t[:, 0])[0, 1] > 0.95
+
+
+def test_a_round_of_something_else_is_left_out_and_flagged_as_not_flat():
+    """A round that disagrees with the others (here: another layout; on a real scan the
+    LEDs moved, or a 3D tree scanned as flat) mustn't spoil the map they made."""
+    good = flat_round(flat_layout(400, seed=1))
+    first, res = build_map([good], 400, shape="flat")
+    assert res.info["agree"] > 0.9
+
+    added = add_round([good], flat_round(flat_layout(400, seed=2)), 400, shape="flat", like=first)
+    assert not added.kept
+    assert added.tree_map is first
+    assert "left out" in added.message and "look flat" in added.message

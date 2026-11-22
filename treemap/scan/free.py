@@ -11,7 +11,9 @@ A scan runs in rounds:
    round fills it in.
 
 Each round's observations are saved to ``<scan_dir>/round_XX.npz``, so later rounds,
-``treemap reconstruct`` and a scan resumed another day all build on them.
+``treemap reconstruct`` and a scan resumed another day all build on them. A round that
+would make the map worse (fewer LEDs ok: it saw something else, or the LEDs moved) is
+left out, saved as ``left_out_XX.npz`` for a look, so one bad round can't spoil the rest.
 """
 
 from __future__ import annotations
@@ -83,7 +85,7 @@ def load_rounds(scan_dir: Path) -> list[Round]:
 
 
 def clear_rounds(scan_dir: Path) -> None:
-    for p in round_paths(scan_dir):
+    for p in [*round_paths(scan_dir), *scan_dir.glob("left_out_*.npz")]:
         p.unlink()
 
 
@@ -200,6 +202,42 @@ def build_map(rounds: list[Round], led_count: int, interpolate: set[int] = froze
         "views": res.views.tolist(),
     }
     return follow(TreeMap(P, status, meta), like), res
+
+
+def flat_warning(info: dict) -> str:
+    """A flat solve whose sightings mostly disagree wasn't of one flat picture."""
+    agree = info.get("agree")
+    if agree is None or agree >= planar.MIN_AGREE:
+        return ""
+    return (f"Doesn't look flat (only {agree:.0%} of sightings agree): "
+            "scan a tree, or a turning virtual tree, as a tree.")
+
+
+@dataclass
+class Added:
+    tree_map: TreeMap | None  # the map to show: the new one if the round was kept
+    kept: bool
+    message: str
+
+
+def add_round(saved: list[Round], rnd: Round, led_count: int,
+              interpolate: set[int] = frozenset(), shape: str = "tree",
+              like: TreeMap | None = None) -> Added:
+    """Solve ``saved`` with ``rnd`` added. ``like`` is the map before this round: if the
+    new map has fewer LEDs ok, or can't be solved, the round is left out and ``like``
+    stays. Without a map before it the round is kept (it may help the next ones)."""
+    try:
+        new, res = build_map([*saved, rnd], led_count, interpolate, shape, like)
+    except (sfm.SfmError, ScanError) as e:
+        if like is None:
+            return Added(None, True, str(e))
+        return Added(like, False, f"Round left out: it didn't solve with the others ({e}).")
+    warning = flat_warning(res.info) if shape == "flat" else ""
+    before, after = (like.counts()["ok"] if like is not None else 0), new.counts()["ok"]
+    if like is not None and after < before:
+        worse = f"Round left out: it made the map worse ({after} found, not {before})."
+        return Added(like, False, f"{worse} {warning}".strip())
+    return Added(new, True, warning)
 
 
 # -- scanning ---------------------------------------------------------------------------
@@ -334,18 +372,23 @@ def scan(
         if tracker.size is None:
             raise ScanError("no camera frames arrived: is the viewer open and showing the tree?")
         f, led, uv = decoded.observations(tracker)
+        message = ""
         if len(f):
             rnd = Round(f, led, uv, tracker.size, focal_guess(tracker.size, meta, s.fov_deg),
                         {"frames": tracker.frame_count, "identified": identified,
                          "cycles": decoded.cycles})
-            rnd.save(s.scan_dir / f"round_{k + 1:02d}.npz")
-            saved.append(rnd)
-        message = ""
-        try:
-            tree_map, res = build_map(saved, n, load_overrides(s.scan_dir), s.shape, tree_map)
-            tree_map.save(s.map_path)
-        except (sfm.SfmError, ScanError) as e:
-            message = str(e)
+            added = add_round(saved, rnd, n, load_overrides(s.scan_dir), s.shape, tree_map)
+            message = added.message
+            if added.kept:  # numbered by the rounds kept, so the files have no gaps
+                rnd.save(s.scan_dir / f"round_{len(saved) + 1:02d}.npz")
+                saved.append(rnd)
+                if added.tree_map is not None:
+                    tree_map = added.tree_map
+                    tree_map.save(s.map_path)
+            else:
+                rnd.save(s.scan_dir / f"left_out_{k + 1:02d}.npz")
+        elif tree_map is None:
+            message = "no LEDs were identified"
         # 3. status
         counts = tree_map.counts() if tree_map is not None else None
         on_update({**base, "rounds_saved": len(saved), "phase": "status",

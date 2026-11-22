@@ -74,27 +74,22 @@
     const tree = app.shape === "tree";
     switch (phase) {
       case "flashing":
-        return tree ? "Walk slowly round the tree, keeping all of it in view."
-          : "Keep every LED in view and the phone steady.";
+        return tree ? "Walk slowly round the tree, all of it in view." : "Keep every LED in view, phone steady.";
       case "solving":
         return "Keep the camera on the LEDs.";
       case "exposure":
-        return "Hold the phone still with all the LEDs in view while it finds an exposure that shows every colour.";
+        return "Hold still with all the LEDs in view.";
       case "colours":
-        return "Keep holding still: the LEDs show red, green, blue and white in turn.";
+        return "Keep holding still.";
       case "status":
         if (waiting) {
-          return tree ? "The tree shows what's found: green found, yellow guessed, red missing. " +
-              "Walk to where it's red, point the phone there, then start the next round."
-            : "The LEDs show what's found: green found, yellow guessed, red missing. Make sure " +
-              "nothing hides the red ones, then start the next round.";
+          return tree ? "Walk to the red part, then start the next round."
+            : "Make sure nothing hides the red LEDs, then start the next round.";
         }
-        return tree ? "The tree shows this round: green found, yellow guessed, red missing. " +
-            "Walk to where it's red: the next round starts in a moment."
-          : "The LEDs show this round: green found, yellow guessed, red missing. Make sure " +
-            "nothing hides the red ones: the next round starts in a moment.";
+        return tree ? "Walk to the red part: the next round starts in a moment."
+          : "Make sure nothing hides the red LEDs: the next round starts in a moment.";
       default:
-        return "The LEDs glow white: point the camera at them, with all of them in view.";
+        return "Point the camera at the LEDs, all of them in view.";
     }
   }
 
@@ -380,6 +375,14 @@
     void wake?.release().catch(() => {});
   });
 
+  // Between rounds: the next round's button takes the focus as it appears.
+  let nextBtn = $state<HTMLButtonElement>();
+  const waiting = $derived(!!st?.waiting); // changes only as the wait starts or ends
+  $effect(() => {
+    if (waiting) nextBtn?.focus();
+  });
+  let messageOpen = $state(false); // a long message is cut to two lines until tapped
+
   const progress = $derived(total > 0 && st?.remaining != null ? 1 - st.remaining / total : null);
   const roundLabel = $derived(!st || !st.round ? "Getting ready" : `Round ${st.round}`);
   const canFinish = $derived(st?.phase === "status");
@@ -429,7 +432,7 @@
     {/if}
   </div>
 
-  <section class="panel">
+  <section class="panel" class:compact={view === "scanning"}>
     {#if view === "ready" && app.addRounds}
       <div class="step">Step 3 of 3</div>
       <h2>Scan parts again</h2>
@@ -485,17 +488,17 @@
                         chosen={picking ? (exposure?.chosen ?? null) : null}
                         trying={picking ? trying : searching} onpick={pick} />
         {#if picking}
-          <p class="small muted">Bars are the LEDs each exposure shows. Tap another to try it:
-            brighter shows dim LEDs, darker keeps the colours clean.</p>
+          <p class="small muted">Tap a bar to try that exposure: brighter shows dim LEDs,
+            darker keeps the colours clean.</p>
           <button class="primary wide" disabled={trying !== null} onclick={keep}>
             {touched ? "Use this exposure" : "Continue"}
           </button>
         {/if}
       {/if}
       {#if problem && st?.round === 0}
-        <div class="note warn">{problem}</div>
+        <p class="line warn">{problem}</p>
       {/if}
-      {#if st?.colours && (st.phase === "colours" || !st.colours.ok)}
+      {#if st?.colours && st.phase === "colours"}
         <div class="colours num small">
           {#each Object.entries(st.colours.read_right) as [name, share] (name)}
             <span class:low={share === null || share < 0.85}>
@@ -504,18 +507,21 @@
           {/each}
         </div>
         {#if !st.colours.ok}
-          <div class="note warn">Some colours are hard to tell apart, so the scan may misread
-            LEDs.{#each st.colours.tips as tip (tip)}<br />{tip}{/each}</div>
+          <p class="line warn">Some colours are hard to tell apart.{#each st.colours.tips as tip (tip)}
+            {" " + tip}{/each}</p>
         {/if}
+      {:else if st?.colours && !st.colours.ok}
+        <p class="line warn">Colours are hard to tell apart: LEDs may be misread.</p>
       {/if}
       {#if st?.phase === "status" && !st.identified}
-        <div class="note warn">No LED was read this round. Is the camera on the LEDs, and are
-          they flashing? Try standing closer.</div>
+        <p class="line warn">No LED was read this round. Is the camera on the flashing LEDs?
+          Try standing closer.</p>
       {:else if st?.phase === "status"}
-        <LedStatus counts={st.counts} status={st.led_status} />
+        <LedStatus counts={st.counts} status={st.led_status} compact />
       {/if}
       {#if st?.message && st.message !== "stopping…" && !(st.phase === "status" && !st.identified)}
-        <div class="note info">{st.message}</div>
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+        <p class="line" class:open={messageOpen} onclick={() => (messageOpen = !messageOpen)}>{st.message}</p>
       {/if}
       {#if up.error}
         <div class="note bad">Frames aren't reaching the server: {up.error}</div>
@@ -523,17 +529,16 @@
         <div class="note warn">The camera is off, so nothing is being filmed.</div>
       {/if}
       {#if st?.waiting}
-        <button class="primary wide" disabled={going} onclick={() => next(false)}>
-          {going ? "Starting…" : `Start round ${(st.round ?? 0) + 1}`}
-        </button>
-        <button class="wide" disabled={going} onclick={() => next(true)}>Finish here</button>
+        <div class="row">
+          <button class="primary" bind:this={nextBtn} disabled={going} onclick={() => next(false)}>
+            {going ? "Starting…" : `Start round ${(st.round ?? 0) + 1}`}
+          </button>
+          <button disabled={going} onclick={() => next(true)}>Finish here</button>
+        </div>
       {:else}
         <button class="wide {canFinish ? 'primary' : 'danger'}" disabled={stopping} onclick={stop}>
           {stopping ? "Stopping…" : canFinish ? "Finish here" : "Stop"}
         </button>
-      {/if}
-      {#if !canFinish && !stopping && st?.round}
-        <p class="small muted after">Stopping keeps the rounds already finished.</p>
       {/if}
 
     {:else if st}
@@ -611,12 +616,22 @@
     padding: 18px 16px calc(16px + env(safe-area-inset-bottom));
     max-height: 55dvh; overflow-y: auto;
   }
+  .panel.compact { max-height: 35dvh; padding-top: 14px; }
+  .compact h2 { font-size: 15px; margin-bottom: 6px; }
+  .compact .hint { margin: 8px 0; font-size: 14px; }
+  .compact .wide { margin-top: 10px; }
+  .line {
+    margin: 6px 0 0; font-size: 13px; color: var(--muted); display: -webkit-box;
+    -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .line.warn { color: var(--warn); }
+  .line.open { display: block; }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row button { flex: 1 1 0; }
   .step { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
   .phase-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .phase-head h2 { margin-bottom: 10px; }
   .hint { margin: 12px 0; font-size: 15px; }
   .wide { width: 100%; margin-top: 14px; }
-  .after { margin: 8px 0 0; text-align: center; }
   .result { margin-top: 12px; }
   .colours { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
   .check { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0 0; }

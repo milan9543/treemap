@@ -3,7 +3,8 @@
   // strip with one column per LED in wiring order, coloured as the LEDs show it.
   import type { Counts } from "../lib/api";
 
-  let { counts, status }: { counts: Counts | null; status?: string } = $props();
+  // compact: the counts only, for the small panel while scanning
+  let { counts, status, compact = false }: { counts: Counts | null; status?: string; compact?: boolean } = $props();
   let canvas = $state<HTMLCanvasElement>();
 
   const COLOURS: Record<string, string> = { o: "#4cc777", i: "#f0be5a", f: "#ef6f6f" };
@@ -27,7 +28,7 @@
     <span><i class="dot failed"></i><b>{counts.failed}</b> missing</span>
   </div>
 {/if}
-{#if status}
+{#if status && !compact}
   <canvas bind:this={canvas} class="strip" aria-label="Each LED's status, first to last"></canvas>
   <div class="ends small muted num"><span>0</span><span>{status.length - 1}</span></div>
 {/if}

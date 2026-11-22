@@ -32,6 +32,7 @@ RANSAC_PX = 3.0  # px, homography inlier threshold
 MIN_VIEWS = 3  # frames an LED must be seen in (consistently) to count as measured
 MAX_FRAMES = 400  # frames used, spread evenly; a still camera repeats itself anyway
 MAX_TILT = 2.5  # bound on the tilt parameters (tan of the angle: about 68°)
+MIN_AGREE = 0.6  # share of sightings near their LED's place below which it isn't one flat picture
 
 
 def _views(frame: np.ndarray, led: np.ndarray, uv: np.ndarray) -> dict[int, tuple]:
@@ -187,6 +188,8 @@ def solve(frame: np.ndarray, led: np.ndarray, uv: np.ndarray, size: tuple[int, i
         "keyframes": len(views),
         "registered": len(H),
         "median_residual_px": round(float(np.median(resid)), 3) if len(resid) else None,
+        # flat layouts: nearly all; a 3D tree, or a picture that moved, far fewer
+        "agree": round(float((resid < RANSAC_PX).mean()), 3) if len(resid) else None,
         "focal_px": round(float(f0), 1),
         "tilt_deg": round(float(np.degrees(np.arccos(1 / np.linalg.norm(n)))), 1),
     }
