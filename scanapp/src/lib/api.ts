@@ -38,6 +38,7 @@ export interface ScanState {
   counts: Counts | null;
   frames_received: number;
   led_status?: string; // one letter per LED: o ok, i interpolated, f failed
+  waiting: boolean; // between rounds, showing the result until scanNext()
   colours: ColourCheck | null; // once measured, for the rest of the scan
 }
 
@@ -129,7 +130,9 @@ export class Api {
   frames = (batch: ArrayBuffer) => this.call<{ frames: number }>("POST", "/scan/frames", batch);
   /** How many LEDs the frames taken at `since` or later show (median per frame). */
   exposureProbe = (since: number, frames = 6) =>
-    this.call<{ frames: number; leds: number }>("POST", "/scan/exposure-probe", { since, frames });
+    this.call<{ frames: number; leds: number; lit: number }>("POST", "/scan/exposure-probe", { since, frames });
+  /** Start the next round (the user is in place), or finish the scan here. */
+  scanNext = (finish = false) => this.call<{ round: number }>("POST", "/scan/next", { finish });
   cameraReady = (body: { message: string; settings: Record<string, unknown> }) =>
     this.call<{ ok: boolean }>("POST", "/scan/camera-ready", body);
 }

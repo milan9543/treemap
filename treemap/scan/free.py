@@ -6,8 +6,9 @@ A scan runs in rounds:
    while each camera frame is tracked and decoded (:mod:`treemap.scan.track`);
 2. **solving**: the observations of *all* rounds so far are solved for 3D positions
    (:mod:`treemap.scan.sfm`), cleaned up along the strips and saved as the tree map;
-3. **status** (``status_s``): the tree shows the result: green ok, yellow interpolated,
-   red failed. Walk to where it's red; the next round fills it in.
+3. **status** (``status_s``, or until ``next_round`` says go): the tree shows the
+   result: green ok, yellow interpolated, red failed. Walk to where it's red; the next
+   round fills it in.
 
 Each round's observations are saved to ``<scan_dir>/round_XX.npz``, so later rounds,
 ``treemap reconstruct`` and a scan resumed another day all build on them.
@@ -29,7 +30,7 @@ import numpy as np
 
 from treemap.cameras.base import Camera
 from treemap.mapping.model import TreeMap
-from treemap.mapping.quality import status_frame
+from treemap.mapping.quality import STATUS_COLORS, status_frame
 from treemap.outputs.base import LedOutput
 from treemap.scan import planar, sfm
 from treemap.scan.cleanup import cleanup, normalise
@@ -100,6 +101,19 @@ def save_overrides(scan_dir: Path, interpolate: set[int]) -> None:
 
 
 # -- solving ----------------------------------------------------------------------------
+
+
+# Waits, calling check_cancel, until the user is ready for the round after ``round``;
+# returns True to go on, False to finish the scan there.
+NextRound = Callable[[int, Callable[[], None]], bool]
+
+
+def read_frame(n: int, read: set[int]) -> np.ndarray:
+    """Before there's a map: LEDs read so far in the interpolated colour (found, not yet
+    placed), the rest in the failed colour."""
+    frame = np.tile(np.array(STATUS_COLORS["failed"], np.uint8), (n, 1))
+    frame[sorted(i for i in read if 0 <= i < n)] = STATUS_COLORS["interpolated"]
+    return frame
 
 
 def build_map(rounds: list[Round], led_count: int, interpolate: set[int] = frozenset(),
@@ -227,10 +241,15 @@ def scan(
     on_update: Callable[[dict], None] = lambda u: None,
     check_cancel: Callable[[], None] = lambda: None,
     sleep: Callable[[float], None] = time.sleep,
+    next_round: NextRound | None = None,
 ) -> TreeMap | None:
     """Run scan rounds until every LED is ok, ``rounds`` (default ``s.max_rounds``) have
     run, or ``check_cancel`` raises. Returns the latest map (None if none could be
-    solved). ``on_update`` gets progress dicts (round, phase, seconds left, counts...)."""
+    solved). ``on_update`` gets progress dicts (round, phase, seconds left, counts...).
+
+    With ``next_round``, the status between rounds stays on the LEDs (progress
+    ``waiting``) until ``next_round(round, check_cancel)`` returns: True to go on, False
+    to finish here."""
     n = s.led_count
     codes, lookup = codewords(n), code_lookup(n)
     if fresh:
@@ -239,7 +258,8 @@ def scan(
     tree_map: TreeMap | None = None
     dim = np.full((n, 3), max(s.brightness // 6, 4), dtype=np.uint8)
 
-    for k in range(len(saved), len(saved) + (rounds or s.max_rounds)):
+    last_round = len(saved) + (rounds or s.max_rounds) - 1
+    for k in range(len(saved), last_round + 1):
         base = {"round": k + 1, "rounds_saved": len(saved)}
         # 1. flashing
         tracker = Tracker(s.colours.classify) if s.colours is not None else Tracker()
@@ -291,12 +311,20 @@ def scan(
                    "identified": identified, "counts": counts, "message": message})
         if tree_map is not None:
             output.show(status_frame(tree_map))
-        else:
-            output.off()
+        else:  # too few to place: LEDs read so far yellow, the rest red
+            output.show(read_frame(n, {int(i) for r in saved for i in r.led}))
+        finished = bool(counts and counts["ok"] == n)
+        if next_round is not None and not finished and k < last_round:
+            on_update({**base, "rounds_saved": len(saved), "phase": "status", "remaining": None,
+                       "waiting": True, "frames": tracker.frame_count, "identified": identified,
+                       "counts": counts, "message": message})
+            if not next_round(k + 1, check_cancel):
+                break
+            continue
         end = time.monotonic() + s.status_s
         while time.monotonic() < end:
             check_cancel()
             sleep(min(0.1, max(end - time.monotonic(), 0)))
-        if counts and counts["ok"] == n:
+        if finished:
             break
     return tree_map

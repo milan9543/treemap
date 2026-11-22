@@ -15,9 +15,12 @@ GET     /scan/state       phase, round, time left, LEDs identified, per-status c
 POST    /scan/frames      a batch of camera frames (see :mod:`treemap.cameras.http`)
 POST    /scan/exposure-probe
                           ``{"since", "frames"}``: how many LEDs the frames taken at
-                          ``since`` or later (the phone's clock) show, median per frame
+                          ``since`` or later (the phone's clock) show, median per frame,
+                          and ``lit``, the share of the picture as bright as an LED
 POST    /scan/camera-ready
                           ``{"message", "settings"}``: the phone has set its exposure
+POST    /scan/next        ``{"finish": false}``: the user is in place, start the next
+                          round (or, with ``finish``, end the scan here)
 ======  ================  ==============================================================
 
 A scan started with ``camera`` (the page sends the phone's model and camera label) sets
@@ -27,7 +30,9 @@ asking ``exposure-probe`` how many LEDs each one shows, and keeps the shortest t
 nearly all (so the dimmest colour too); it then calls
 ``camera-ready``. In phase ``colours`` the server measures how the phone sees each colour
 of the code and keeps that per phone (``colours`` in the state: the share read right
-per colour, whether all pass, tips). Then the rounds start.
+per colour, whether all pass, tips). Then the rounds start. After each round (but the
+last) the LEDs show its result until the page calls ``next`` (``waiting`` in the state),
+so the user can walk to the red parts first.
 
 One thing drives the LEDs at a time. A test pattern or an effect replaces whichever of
 the two was showing; a scan stops both, and neither can start until the scan is over.
@@ -49,7 +54,7 @@ from treemap import __version__
 from treemap.api.http import HttpError, Request, Router
 from treemap.api.leds import CommandError, LedCommands
 from treemap.cameras.http import BatchError, HttpCamera
-from treemap.scan.track import find_blobs
+from treemap.scan.track import MIN_LEVEL, find_blobs
 from treemap.workflow import WorkflowError
 from treemap.config import Config
 from treemap.effects import EffectContext, ParamError
@@ -64,6 +69,7 @@ API_VERSION = 1
 PREFIX = "/api/v1"
 CAMERA_ID = "browser"  # whose measured colours a scan from the page reads by
 STATUS_LETTERS = {"ok": "o", "interpolated": "i", "failed": "f"}
+NEXT_TIMEOUT_S = 900.0  # between rounds, for the user; then the scan finishes there
 READY_TIMEOUT_S = 300.0  # for the page to set the phone's exposure (the user may pick one)
 PROBE_TIMEOUT_S = 3.0  # for the frames an exposure probe asks for to arrive
 
@@ -98,8 +104,12 @@ class Api:
         self._ready = threading.Event()  # the page has set the phone's exposure
         self._ready_info: dict[str, Any] = {}
         self._probing = threading.Lock()
+        self._go = threading.Condition()
+        self._go_round = 0  # the user has asked for rounds up to this one
+        self._finish = False
         self.jobs = Jobs(cfg, shared, stop_effects=self._free_leds, camera=self.camera,
-                         camera_id=CAMERA_ID, camera_ready=self._wait_camera_ready)
+                         camera_id=CAMERA_ID, camera_ready=self._wait_camera_ready,
+                         next_round=self._wait_next_round)
         self.router = Router()
         for method, path, handler in (
             ("GET", "/info", self.info),
@@ -111,6 +121,7 @@ class Api:
             ("POST", "/scan/frames", self.scan_frames),
             ("POST", "/scan/exposure-probe", self.exposure_probe),
             ("POST", "/scan/camera-ready", self.camera_ready),
+            ("POST", "/scan/next", self.scan_next),
         ):
             self.router.add(method, PREFIX + path, handler)
 
@@ -199,6 +210,8 @@ class Api:
             raise HttpError(409, f"a {self.jobs.state()['kind']} is already running")
         started = datetime.now(timezone.utc)
         self._ready.clear()
+        with self._go:
+            self._go_round, self._finish = 0, False
         try:
             job = self.jobs.start("scan", body)
         except JobRejected as e:
@@ -221,6 +234,7 @@ class Api:
             "error": st.get("error"),
             **{k: progress.get(k) for k in ("phase", "round", "remaining", "frames",
                                             "identified", "counts")},
+            "waiting": bool(progress.get("waiting")) and st["status"] == "running",
             "frames_received": self.camera.received,
             "colours": st.get("colours"),
         }
@@ -273,9 +287,11 @@ class Api:
         try:
             frames = self.camera.frames_since(float(since), count, PROBE_TIMEOUT_S)
             counts = [len(find_blobs(f.image)) for f in frames]
+            lit = [float(np.mean(f.image.max(axis=2) >= MIN_LEVEL)) for f in frames]
         finally:
             self._probing.release()
-        return {"frames": len(frames), "leds": int(np.median(counts)) if counts else 0}
+        return {"frames": len(frames), "leds": int(np.median(counts)) if counts else 0,
+                "lit": round(float(np.median(lit)), 4) if lit else 0.0}
 
     def camera_ready(self, req: Request) -> dict[str, Any]:
         body = req.json()
@@ -298,6 +314,29 @@ class Api:
                 raise WorkflowError("the phone didn't set its exposure: is the scan page "
                                     "still open?")
         return self._ready_info
+
+    def scan_next(self, req: Request) -> dict[str, Any]:
+        finish = req.json().get("finish", False)
+        if not isinstance(finish, bool):
+            raise HttpError(400, "finish must be true or false")
+        progress = self.jobs.state().get("progress") or {}
+        if not (self.jobs.uses_leds and progress.get("waiting")):
+            raise HttpError(409, "the scan isn't waiting between rounds")
+        with self._go:
+            self._go_round = max(self._go_round, int(progress.get("round") or 0) + 1)
+            self._finish = finish
+            self._go.notify_all()
+        return {"round": self._go_round, "finish": finish}
+
+    def _wait_next_round(self, round_: int, check_cancel: Callable[[], None]) -> bool:
+        end = time.monotonic() + NEXT_TIMEOUT_S
+        with self._go:
+            while self._go_round < round_ + 1:
+                self._go.wait(0.25)
+                check_cancel()
+                if time.monotonic() > end:
+                    return False  # nobody came back: keep what's done
+            return not self._finish
 
     # -- lifecycle ----------------------------------------------------------------------
 

@@ -6,9 +6,11 @@
   // long as the scan runs, and its state is polled once a second. When the server
   // reaches the "exposure" phase, the page sets the camera's exposure for the LEDs
   // (exposure.ts: found automatically, or the one last used with this camera), then
-  // lets the user tap another exposure to try it; Continue (or 5 s untouched) tells the
-  // server it's done, and the server measures the colours.
+  // lets the user tap another exposure to try it; Continue tells the server it's done,
+  // and the server measures the colours. Between rounds the LEDs show the result until
+  // the user, now standing where it's red, starts the next round.
   import { onDestroy, onMount } from "svelte";
+  import ExposurePicker from "../components/ExposurePicker.svelte";
   import LedStatus from "../components/LedStatus.svelte";
   import { ApiError, type Api, type Phase, type ScanState } from "../lib/api";
   import { cameraName, openRearCamera, type Camera } from "../lib/camera";
@@ -34,18 +36,22 @@
   let phaseKey = "";
   let exposingFor: number | null = null; // the scan whose exposure this page has set (or is setting)
   let steps = $state<Step[]>([]); // the exposures tried, and the LEDs each showed
+  let autoChosen = $state<number | null>(null); // the one the search (or "last used") picked
   let exposure = $state<Exposure | null>(null);
   let problem = $state<string | null>(null); // the exposure couldn't be set
   let picking = $state(false); // waiting for the user to keep this exposure or try another
-  let touched = $state(false); // they tried another: no more auto-continue
+  // while searching: the step being counted (the first not tried yet)
+  const searching = $derived(picking ? null : (() => {
+    const i = steps.findIndex((s) => s.leds === null);
+    return i < 0 ? null : i;
+  })());
+  let touched = $state(false); // they tried another exposure
+  let going = $state(false); // asked for the next round, waiting for it to start
   let trying = $state<number | null>(null); // the step being tried
-  let left = $state(0); // seconds until it continues by itself
-  let timer: ReturnType<typeof setInterval> | undefined;
   let camId = $state<string | null>(null);
   let lastUsed = $state<{ ms: number; iso: number | null } | null>(null);
   let useLast = $state(false);
   let howFound = "";
-  const AUTO_CONTINUE_S = 5;
   let alive = true;
   let polling = false;
   let wake: WakeLockSentinel | null = null;
@@ -64,7 +70,7 @@
     status: "Result",
   };
 
-  function hint(phase: Phase | null): string {
+  function hint(phase: Phase | null, waiting = false): string {
     const tree = app.shape === "tree";
     switch (phase) {
       case "flashing":
@@ -77,6 +83,12 @@
       case "colours":
         return "Keep holding still: the LEDs show red, green, blue and white in turn.";
       case "status":
+        if (waiting) {
+          return tree ? "The tree shows what's found: green found, yellow guessed, red missing. " +
+              "Walk to where it's red, point the phone there, then start the next round."
+            : "The LEDs show what's found: green found, yellow guessed, red missing. Make sure " +
+              "nothing hides the red ones, then start the next round.";
+        }
         return tree ? "The tree shows this round: green found, yellow guessed, red missing. " +
             "Walk to where it's red: the next round starts in a moment."
           : "The LEDs show this round: green found, yellow guessed, red missing. Make sure " +
@@ -179,6 +191,7 @@
         }
         st = s;
         error = null;
+        if (!s.waiting) going = false;
         if (s.status === "running" && s.phase === "exposure" && exposingFor !== s.id) {
           void setUp(s.id);
         }
@@ -208,6 +221,7 @@
       const r = last ? await useExposure(cam.track, last) : await setExposure(cam.track, p);
       exposure = r;
       steps = r.steps;
+      autoChosen = r.chosen;
       if (r.chosen === null) { // nothing to choose from: auto exposure, locked or not
         if (!r.ok) problem = r.message;
         await ready({ message: r.message, settings: r.settings });
@@ -228,6 +242,7 @@
   function probe(id: number): Probe {
     return {
       probe: (since) => api.exposureProbe(since),
+      ledCount: n,
       mark: () => up.mark(),
       onStep: (s) => (steps = s),
       alive: () => alive && mine === id && !stopping,
@@ -237,26 +252,18 @@
   function startPicking() {
     picking = true;
     touched = false;
-    left = AUTO_CONTINUE_S;
-    clearInterval(timer);
-    timer = setInterval(() => {
-      if (touched || trying !== null) return;
-      left -= 1;
-      if (left <= 0) void keep();
-    }, 1000);
   }
 
   function stopPicking() {
     picking = false;
     trying = null;
-    clearInterval(timer);
   }
 
   async function tryChosen(i: number, p: Probe) {
     trying = i;
     try {
-      const leds = await tryStep(cam!.track, steps[i], p);
-      steps = steps.map((s, j) => (j === i ? { ...s, leds } : s));
+      const tried = await tryStep(cam!.track, steps[i], p);
+      steps = steps.map((s, j) => (j === i ? tried : s));
       exposure = { ...exposure!, steps, chosen: i, ok: true, settings: cameraSettings(cam!.track) };
       problem = null;
     } finally {
@@ -307,6 +314,17 @@
     }
   }
 
+  /** Between rounds: start the next one, or finish with the rounds so far. */
+  async function next(finish: boolean) {
+    going = true;
+    try {
+      await api.scanNext(finish); // stays "going" until the poll sees the next round
+    } catch (e) {
+      error = (e as Error).message;
+      going = false;
+    }
+  }
+
   async function stop() {
     stopping = true;
     try {
@@ -349,7 +367,6 @@
 
   onDestroy(() => {
     alive = false;
-    clearInterval(timer);
     document.removeEventListener("visibilitychange", onVisible);
     up.dispose();
     cam?.stream.getTracks().forEach((t) => t.stop());
@@ -412,12 +429,13 @@
       <p class="muted small">
         {#if app.shape === "tree"}
           Stand where you can see the whole tree. Once it starts, the LEDs glow white for a
-          few seconds, then flash their codes while you walk slowly round it. Each round ends
-          with the tree showing what was found; it carries on until every LED is found.
+          few seconds, then flash their codes while you walk slowly round it. After each round
+          the tree shows what was found; walk to the red parts and start the next round, until
+          every LED is found.
         {:else}
           Hold the phone so every LED is in view, as square-on as you can. The LEDs glow white
-          for a few seconds, then flash their codes; each round ends with them showing what
-          was found.
+          for a few seconds, then flash their codes; after each round they show what was
+          found, and you start the next round when you're ready.
         {/if}
       </p>
       {#if app.info?.map?.fits}
@@ -443,22 +461,16 @@
       <div class="bar" aria-hidden="true">
         <div style:width="{progress === null ? 0 : Math.min(100, 100 * progress)}%"></div>
       </div>
-      <p class="hint">{hint(st?.phase ?? null)}</p>
+      <p class="hint">{hint(st?.phase ?? null, st?.waiting)}</p>
       {#if st?.phase === "exposure" && steps.length}
-        <div class="steps num small" aria-live="polite">
-          {#each steps as s, i (i)}
-            <button class:tried={s.leds !== null} class:chosen={picking && exposure?.chosen === i}
-                    disabled={!picking || trying !== null} onclick={() => pick(i)}>
-              {s.ms} ms{s.iso && s.iso !== steps[0].iso ? ` · ISO ${s.iso}` : ""}
-              <b>{trying === i ? "…" : (s.leds ?? "–")}</b>
-            </button>
-          {/each}
-        </div>
+        <ExposurePicker {steps} {picking} ledCount={n} auto={autoChosen}
+                        chosen={picking ? (exposure?.chosen ?? null) : null}
+                        trying={picking ? trying : searching} onpick={pick} />
         {#if picking}
-          <p class="small muted">The highlighted exposure is set; the numbers are LEDs seen.
-            Tap another to try it: brighter shows dim LEDs, darker keeps colours clean.</p>
+          <p class="small muted">Bars are the LEDs each exposure shows. Tap another to try it:
+            brighter shows dim LEDs, darker keeps the colours clean.</p>
           <button class="primary wide" disabled={trying !== null} onclick={keep}>
-            {touched ? "Use this exposure" : `Continue (${left})`}
+            {touched ? "Use this exposure" : "Continue"}
           </button>
         {/if}
       {/if}
@@ -492,9 +504,16 @@
       {:else if !cam}
         <div class="note warn">The camera is off, so nothing is being filmed.</div>
       {/if}
-      <button class="wide {canFinish ? 'primary' : 'danger'}" disabled={stopping} onclick={stop}>
-        {stopping ? "Stopping…" : canFinish ? "Finish here" : "Stop"}
-      </button>
+      {#if st?.waiting}
+        <button class="primary wide" disabled={going} onclick={() => next(false)}>
+          {going ? "Starting…" : `Start round ${(st.round ?? 0) + 1}`}
+        </button>
+        <button class="wide" disabled={going} onclick={() => next(true)}>Finish here</button>
+      {:else}
+        <button class="wide {canFinish ? 'primary' : 'danger'}" disabled={stopping} onclick={stop}>
+          {stopping ? "Stopping…" : canFinish ? "Finish here" : "Stop"}
+        </button>
+      {/if}
       {#if !canFinish && !stopping && st?.round}
         <p class="small muted after">Stopping keeps the rounds already finished.</p>
       {/if}
@@ -578,22 +597,13 @@
   .wide { width: 100%; margin-top: 14px; }
   .after { margin: 8px 0 0; text-align: center; }
   .result { margin-top: 12px; }
-  .steps, .colours { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
-  .steps button {
-    min-height: 0; font: inherit; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted);
-    border: 1px solid transparent;
-  }
-  .steps button:disabled { opacity: 1; cursor: default; }
-  .steps button.tried { color: var(--text); }
-  .steps button.chosen { border-color: var(--accent); background: var(--accent-bg); color: var(--text); }
+  .colours { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
   .check { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0 0; }
   .check input { margin-top: 3px; }
   .colours span {
     display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
     background: var(--surface-2); color: var(--muted);
   }
-  .steps b { font-weight: 600; }
   .colours span.low { color: var(--bad); }
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
   .dot.red { background: #ff3b30; }

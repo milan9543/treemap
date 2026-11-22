@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Api, ApiError, API_VERSION, normaliseServer, type Info, type Shape } from "../lib/api";
-  import { app, browserProblem, useServer } from "../lib/state.svelte";
+  import { app, browserProblem, disconnect, useServer } from "../lib/state.svelte";
 
   let address = $state(app.server.replace(/^http:\/\//, ""));
   let connecting = $state(false);
@@ -93,7 +93,12 @@
 
     {#if info}
       <dl class="facts connected">
-        <dt>Server</dt><dd>{info.server} <span class="ok-dot" aria-hidden="true"></span></dd>
+        <dt>Server</dt>
+        <dd class="server">
+          <span>{info.server} <span class="ok-dot" aria-hidden="true"></span></span>
+          <button type="button" class="small-btn" onclick={() => { problem = null; disconnect(); }}>
+            Disconnect</button>
+        </dd>
         <dt>LEDs</dt>
         <dd class="num">{info.led_count}
           {#if info.controllers.length}
@@ -122,7 +127,8 @@
     {#if info.busy === "scan"}
       <section class="card">
         <h2>A scan is running</h2>
-        <p class="muted small">Pick it up here: the page films for it again.</p>
+        <p class="muted small">Pick it up here: the page films for it again. Disconnecting
+          leaves it waiting on the server; stop it from its screen first.</p>
         <button class="primary wide" onclick={() => (app.screen = "scan")}>Go to the scan</button>
       </section>
     {:else}
@@ -158,5 +164,7 @@
     background: var(--ok); margin-left: 4px; vertical-align: 1px;
   }
   .replace { margin: 10px 0 0; }
+  .server { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .small-btn { min-height: 32px; padding: 4px 12px; font-size: 13px; }
   .wide { width: 100%; }
 </style>

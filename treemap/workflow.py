@@ -97,6 +97,7 @@ def run_scan(
     camera: Camera | None = None,
     camera_id: str | None = None,
     camera_ready: CameraReady | None = None,
+    next_round: Callable[[int, Callable[[], None]], bool] | None = None,
     on_update: Callable[[dict], None] = lambda u: None,
     check_cancel: Callable[[], None] = lambda: None,
     on_message: Callable[[str], None] = lambda m: None,
@@ -108,6 +109,8 @@ def run_scan(
     First the camera gets ready (:func:`prepare_camera`: a countdown, then the camera's
     exposure and colours). ``on_update`` gets progress dicts, ``round`` 0 while getting
     ready. Interrupting (any exception from a callback) keeps the rounds finished so far.
+    ``next_round`` makes the status between rounds wait for the user (see
+    :func:`treemap.scan.free.scan`).
     """
     from treemap.cameras import CameraError, create_camera
     from treemap.cameras.browser import CameraUnavailable
@@ -123,7 +126,7 @@ def run_scan(
             colours = prepare_camera(cfg, camera, output, on_update, check_cancel, on_message,
                                      camera_id, camera_ready)
             return scan(output, camera, scan_settings(cfg, colours), fresh=True, rounds=rounds,
-                        on_update=on_update, check_cancel=check_cancel)
+                        on_update=on_update, check_cancel=check_cancel, next_round=next_round)
         except (ScanError, CameraUnavailable) as e:
             raise WorkflowError(str(e)) from None
 
@@ -172,7 +175,8 @@ def prepare_camera(
         if ready.get("message"):
             on_message(ready["message"])
         return _measure_colours(cfg, camera, output, on_update, check_cancel, on_message,
-                                camera_id, ready.get("settings") or {}, settle_s=1.0)
+                                camera_id, ready.get("settings") or {}, settle_s=1.0,
+                                exposure=ready.get("message"))
     if not hasattr(camera, "exposure"):  # the sim camera: nothing to set
         colours, problem = camera_colours(cfg, camera_id)
         if problem:
@@ -190,7 +194,7 @@ def prepare_camera(
 def _measure_colours(
     cfg: Config, camera: Camera, output: LedOutput, on_update: Callable[[dict], None],
     check_cancel: Callable[[], None], on_message: Callable[[str], None],
-    camera_id: str | None, settings: dict, settle_s: float = 0.6,
+    camera_id: str | None, settings: dict, settle_s: float = 0.6, exposure: str | None = None,
 ) -> ColourModel | None:
     """Step 3 of :func:`prepare_camera`. The page's frames arrive in batches up to half
     a second late, hence its longer ``settle_s``."""
@@ -216,7 +220,7 @@ def _measure_colours(
         "tips": tips,
     }})
     if seen:
-        save_colours(cfg, model, results, camera_id, settings)
+        save_colours(cfg, model, results, camera_id, settings, exposure)
         on_message("colours read right: " + ", ".join(f"{r.name} {r.share:.0%}" for r in results))
         return model
     on_message("too few LEDs seen to measure the colours; point the camera at the LEDs")
@@ -227,15 +231,18 @@ def _measure_colours(
 
 
 def save_colours(cfg: Config, model: ColourModel, results: list, camera_id: str | None = None,
-                 settings: dict | None = None) -> Path:
+                 settings: dict | None = None, exposure: str | None = None) -> Path:
     """Save measured colours for ``camera_id`` (default: the configured camera), with
-    the camera settings they were measured at. Returns where."""
+    the camera settings they were measured at (and how the exposure was found, if the
+    page said). Returns where."""
     camera_id = camera_id or cfg.camera_id
     size = next((r.sample.shape[1::-1] for r in results if r.sample is not None), None)
     model.meta.update(camera=camera_id, video_size=list(size) if size else None,
                       camera_settings=settings or {},
                       read_right={r.name: None if r.share != r.share else round(r.share, 3)
                                   for r in results})
+    if exposure:
+        model.meta["exposure"] = exposure
     path = cfg.colours_path_for(camera_id)
     model.save(path)
     return path

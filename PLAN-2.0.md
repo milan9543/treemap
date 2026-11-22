@@ -242,8 +242,8 @@ started with `camera` (the phone's model and camera label) gets two new phases a
 countdown. In **exposure**, the LEDs show the code's colours along the strip (red, green,
 blue, white, …) at the scan's brightness while the page runs its search
 ([scanapp/src/lib/exposure.ts](scanapp/src/lib/exposure.ts)), then lets the user tap
-another exposure to try it, and calls `POST /scan/camera-ready` on Continue (or after 5 s
-untouched). The server gives up after 5 minutes. In **colours**, the server runs the
+another exposure to try it, and calls `POST /scan/camera-ready` when the user taps
+Continue. The server gives up after 5 minutes. In **colours**, the server runs the
 existing colour check on the uploaded frames and saves the result to
 `data/camera_colours/<phone>.json`. `/scan/state` then has `colours`: the share read
 right per colour, whether all pass, and tips. Changes from the sketch:
@@ -255,9 +255,21 @@ right per colour, whether all pass, and tips. Changes from the sketch:
   and no LED was read. It now climbs 0.5–8 ms at ISO 100, then ISO 200–1600 at 8 ms (not
   longer, which would smear while walking), stops after two steps in a row that add
   under 5%, and keeps the darkest within 95% of the best. "The best", not "all": far-side
-  LEDs never show.
-- **Manual override:** the steps are buttons; tapping one sets and counts it. The start
-  screen can reuse the exposure last kept with this camera instead of searching.
+  LEDs never show. The second try climbed to ISO 1600, where the phone saw about 2,200
+  spots on a 400-LED tree (lit branches, noise) and rounds read only 26–92 LEDs. So a step
+  that sees more spots than there are LEDs, or lights over 15% of the picture
+  (`exposure-probe` also returns `lit`), is too bright: the climb stops and it's never
+  picked.
+- **Manual override:** a strip of the exposures from darker to brighter, each with a bar
+  of the LEDs it saw, the automatic pick tagged; tapping one sets and counts it. The
+  start screen can reuse the exposure last kept with this camera instead of searching.
+  The colours file keeps the search's counts.
+- **Rounds start when the user says** (`POST /scan/next`, `waiting` in the state): after
+  each round but the last, the LEDs show the result until the user, standing where it's
+  red, taps Start round N, or Finish here. The server waits up to 15 minutes, then
+  finishes with what it has. A round too sparse to solve shows the LEDs read so far
+  yellow and the rest red, instead of going dark.
+- The page can disconnect from the server, which also stops it reconnecting on reload.
 - The colour check waits 1 s after each change instead of 0.6 s, because frames from the
   page arrive in batches, and flags a colour seen in under 70% as many LEDs as white.
 Still to check on the phone: 4.3's 85% bar.

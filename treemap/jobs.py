@@ -9,7 +9,7 @@ Job kinds and their parameters:
 * ``scan``: ``rounds`` (int, default scan.max_rounds); ``shape`` (tree or flat),
   ``symbol_ms`` and ``brightness`` override the config for this scan; ``camera`` (the
   scan page's phone) makes it wait for the page to set the exposure, then measure that
-  phone's colours. Starts over
+  phone's colours, and waits between rounds for the page to start the next. Starts over
   (earlier rounds are forgotten) and runs until every LED is ok, the rounds are done, or
   it's stopped.
 * ``reconstruct``: solve again from the saved rounds
@@ -59,6 +59,7 @@ class Jobs:
         camera: Camera | None = None,
         camera_id: str | None = None,
         camera_ready: workflow.CameraReady | None = None,
+        next_round: Callable[[int, Callable[[], None]], bool] | None = None,
     ) -> None:
         self.cfg = cfg
         self.sim_port = sim_port  # where the viewer's camera frames come from
@@ -67,6 +68,7 @@ class Jobs:
         # that names its phone (`camera`) waits on `camera_ready` for the page to set
         # the exposure, then measures that phone's colours.
         self.camera, self.camera_id, self.camera_ready = camera, camera_id, camera_ready
+        self.next_round = next_round  # for those scans too: rounds start when the user says
         self.output_factory = output_factory
         self.stop_effects = stop_effects
         self.on_change = on_change
@@ -203,19 +205,20 @@ class Jobs:
                     raise workflow.WorkflowError(f"{key} must be a whole number {lo}-{hi}")
                 changes[key] = p[key]
         cfg.scan = dataclasses.replace(cfg.scan, **changes)
-        camera_id, camera_ready = self.camera_id, None
+        camera_id, camera_ready, next_round = self.camera_id, None, None
         if p.get("camera") is not None:
             if self.camera_ready is None:
                 raise workflow.WorkflowError("this server's scans can't take a camera")
             if not isinstance(p["camera"], str) or not 0 < len(p["camera"].strip()) <= 200:
                 raise workflow.WorkflowError("camera must be the phone's camera name")
             camera_id, camera_ready = p["camera"].strip(), self.camera_ready
+            next_round = self.next_round
 
         def run() -> dict:
             workflow.ensure_sim_tree(cfg)
             tree_map = self._with_output(lambda out: workflow.run_scan(
                 cfg, out, rounds=rounds, sim_port=self.sim_port, camera=self.camera,
-                camera_id=camera_id, camera_ready=camera_ready,
+                camera_id=camera_id, camera_ready=camera_ready, next_round=next_round,
                 on_update=self._on_update, check_cancel=self._check_cancel,
                 on_message=lambda m: self._update(message=m),
             ))

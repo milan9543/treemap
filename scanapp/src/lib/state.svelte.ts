@@ -44,6 +44,22 @@ export function useServer(api: Api, info: Info): void {
   history.replaceState(null, "", url);
 }
 
+/** Let go of the server: back to the connect screen, and no reconnecting by itself on
+ * the next visit. The address stays in the box (this visit only) to connect again. */
+export function disconnect(): void {
+  app.api = null;
+  app.info = null;
+  app.screen = "connect";
+  try {
+    localStorage.removeItem("server");
+  } catch {
+    /* nothing remembered */
+  }
+  const url = new URL(location.href);
+  url.searchParams.delete("server");
+  history.replaceState(null, "", url);
+}
+
 /** Android Chrome is the only browser that can scan: it alone lets a page lock the
  * camera's exposure and white balance. */
 export function browserProblem(): string | null {

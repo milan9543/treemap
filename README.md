@@ -297,7 +297,7 @@ Then scan from the phone as usual, filming the screen:
   mouse.
 - `R` goes back to the start, `H` hides the panel (it also hides while you walk), and
   `L` switches the **test lights** (white, or the code's colours along the strip), which
-  light the layout from the page while `treemap serve` sends nothing.
+  light the layout from the page while `treemap serve` shows nothing (sends nothing, or only its dark still frame).
 - **Hold the phone square-on to the screen, with the layout in the middle.** The scan
   assumes one camera; filming a screen at an angle skews the picture in a way it doesn't
   model.

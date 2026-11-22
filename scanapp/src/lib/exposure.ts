@@ -9,7 +9,9 @@
 // more LEDs than the best so far (so noise and glow at high ISO don't drag it brighter).
 // The darkest that shows nearly as many LEDs as the best is kept: it clips the LEDs'
 // colours least. "As many as the best", not "all": LEDs on the far side of the tree
-// never show. Past 8 ms the ISO goes up instead of the exposure time, which would smear
+// never show. A step that shows more spots than the tree has LEDs, or lights more than
+// LIT_MAX of the picture, is seeing lit branches, the room or noise, not just LEDs: it's
+// too bright, the climb stops there, and it's never picked. Past 8 ms the ISO goes up instead of the exposure time, which would smear
 // the LEDs as you walk. The page then lets the user pick another step (Scan.svelte).
 //
 // Otherwise: let automatic exposure settle on the LEDs, then lock it, if the phone can.
@@ -24,6 +26,7 @@ const LONGER_MS = [16, 33]; // instead, for cameras without an ISO control
 const ENOUGH = 0.95; // of the most LEDs any exposure shows
 const GAIN = 0.05; // a brighter step must show this many more LEDs to count as better
 const FLAT_STEPS = 2; // stop after this many steps in a row that weren't better
+const LIT_MAX = 0.15; // of the picture as bright as an LED: more is the scene, not LEDs
 const SETTLE_S = 0.3; // frames this soon after a change may still have the old exposure
 const AUTO_SETTLE_MS = 2500;
 const DAYLIGHT_K = 5000;
@@ -42,6 +45,12 @@ export interface Step {
   ms: number;
   iso: number | null; // null: the camera has no ISO control
   leds: number | null; // null: not tried yet
+  lit?: number; // share of the picture as bright as an LED
+}
+
+/** Seeing more than LEDs: lit branches, the room, or noise. */
+export function tooBright(s: Step, ledCount: number): boolean {
+  return s.leds !== null && (s.leds > ledCount || (s.lit ?? 0) > LIT_MAX);
 }
 
 export interface Exposure {
@@ -55,7 +64,9 @@ export interface Exposure {
 
 export interface Probe {
   /** How many LEDs the frames taken at `since` or later show; 0 frames if none came. */
-  probe: (since: number) => Promise<{ frames: number; leds: number }>;
+  probe: (since: number) => Promise<{ frames: number; leds: number; lit: number }>;
+  /** How many LEDs there are: no exposure can honestly see more. */
+  ledCount: number;
   /** The newest frame's time (the clock `since` is on), or null if not filming. */
   mark: () => Promise<number | null>;
   /** Each exposure's count so far, for the page to show. */
@@ -116,7 +127,7 @@ export function setStep(track: MediaStreamTrack, s: Step): Promise<boolean> {
 }
 
 /** Set one exposure and count the LEDs it shows. Throws if it can't. */
-export async function tryStep(track: MediaStreamTrack, s: Step, p: Probe): Promise<number> {
+export async function tryStep(track: MediaStreamTrack, s: Step, p: Probe): Promise<Step> {
   if (!p.alive()) throw new Gone();
   if (!(await setStep(track, s))) throw new Error("couldn't set the camera's exposure");
   const t = await p.mark();
@@ -124,14 +135,15 @@ export async function tryStep(track: MediaStreamTrack, s: Step, p: Probe): Promi
   if (!p.alive()) throw new Gone();
   const r = await p.probe(t + SETTLE_S);
   if (!r.frames) throw new Error("No frames reached the server.");
-  return r.leds;
+  return { ...s, leds: r.leds, lit: r.lit };
 }
 
 /** What was set, for the server's log. */
 export function describe(e: Exposure, how: string): string {
   const s = e.chosen === null ? null : e.steps[e.chosen];
   if (!s) return e.message;
-  const seen = e.steps.filter((x) => x.leds !== null).map((x) => `${stepName(x)}: ${x.leds}`).join(", ");
+  const seen = e.steps.filter((x) => x.leds !== null)
+    .map((x) => `${stepName(x)}: ${x.leds} (${Math.round((x.lit ?? 0) * 1000) / 10}% lit)`).join(", ");
   return `exposure ${stepName(s)} (${how})${e.whiteBalance ? "" : ", white balance stays automatic"}` +
     (seen ? `; LEDs seen per exposure: ${seen}` : "");
 }
@@ -160,21 +172,26 @@ async function search(track: MediaStreamTrack, c: Caps, p: Probe): Promise<Expos
   let most = 0;
   let flat = 0; // steps in a row that added little: brighter won't show more LEDs
   for (const [i, s] of steps.entries()) {
-    const leds = await tryStep(track, s, p);
-    steps[i] = { ...s, leds };
+    steps[i] = await tryStep(track, s, p);
     p.onStep([...steps]);
+    if (tooBright(steps[i], p.ledCount)) break;
+    const leds = steps[i].leds!;
     flat = most > 0 && leds < most * (1 + GAIN) ? flat + 1 : 0;
     most = Math.max(most, leds);
     if (flat >= FLAT_STEPS) break;
   }
   const result = { settings: {}, steps, whiteBalance: wb };
   if (most === 0) {
-    const guess = Math.min(4, steps.length - 1); // 8 ms at ISO 100: a middling guess
+    const over = tooBright(steps[0], p.ledCount);
+    const guess = over ? 0 : Math.min(4, steps.length - 1); // else 8 ms at ISO 100: a middling guess
     await setStep(track, steps[guess]);
     return { ...result, settings: cameraSettings(track), chosen: guess, ok: false,
-             message: "no LEDs seen at any exposure" };
+             message: over ? "even the darkest exposure sees more than the LEDs: darken the room"
+               : "no LEDs seen at any exposure" };
   }
-  const chosen = steps.findIndex((s) => s.leds !== null && s.leds >= ENOUGH * most);
+  // most > 0 means some step wasn't too bright, so this finds one
+  const chosen = steps.findIndex((s) => s.leds !== null && !tooBright(s, p.ledCount) &&
+                                        s.leds >= ENOUGH * most);
   await setStep(track, steps[chosen]);
   return { ...result, settings: cameraSettings(track), chosen, ok: true, message: "" };
 }
