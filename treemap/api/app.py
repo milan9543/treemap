@@ -21,9 +21,10 @@ POST    /scan/camera-ready
 ======  ================  ==============================================================
 
 A scan started with ``camera`` (the page sends the phone's model and camera label) sets
-the phone up first: after the countdown, in phase ``exposure``, the LEDs show white at
-the scan's brightness while the page tries exposures, asking ``exposure-probe`` how many
-LEDs each one shows, and keeps the shortest that shows nearly all; it then calls
+the phone up first: after the countdown, in phase ``exposure``, the LEDs light up at
+the scan's brightness, each in one of the code's colours, while the page tries exposures,
+asking ``exposure-probe`` how many LEDs each one shows, and keeps the shortest that shows
+nearly all (so the dimmest colour too); it then calls
 ``camera-ready``. In phase ``colours`` the server measures how the phone sees each colour
 of the code and keeps that per phone (``colours`` in the state: the share read right
 per colour, whether all pass, tips). Then the rounds start.
@@ -63,7 +64,7 @@ API_VERSION = 1
 PREFIX = "/api/v1"
 CAMERA_ID = "browser"  # whose measured colours a scan from the page reads by
 STATUS_LETTERS = {"ok": "o", "interpolated": "i", "failed": "f"}
-READY_TIMEOUT_S = 90.0  # for the page to set the phone's exposure
+READY_TIMEOUT_S = 300.0  # for the page to set the phone's exposure (the user may pick one)
 PROBE_TIMEOUT_S = 3.0  # for the frames an exposure probe asks for to arrive
 
 

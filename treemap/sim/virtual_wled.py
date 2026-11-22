@@ -4,8 +4,8 @@ driven over the network exactly like the real LEDs.
 ``treemap sim wled`` runs it. Configure ``treemap serve`` with it as its controller
 (``controllers: [{host: <this computer's IP>:<port>}]``, ``output: wled``) and the server
 can't tell it from real hardware: it reads the LED count from ``/json/info`` and streams
-colours over DDP. The page shows them on the 3D layout, and you walk round it with WASD
-and the mouse while the phone films the screen. So the whole 2.0 path is tested: phone
+colours over DDP. The page shows them on the 3D layout, which turns (by dragging, or by
+itself) or which you walk round, while the phone films the screen. So the whole 2.0 path is tested: phone
 page, server, DDP, LEDs, camera.
 
 Network:

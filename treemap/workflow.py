@@ -142,10 +142,10 @@ def prepare_camera(
 
     1. **countdown** (``scan.countdown_s``): the LEDs glow dim white, to point the
        camera at them.
-    2. **exposure**: the LEDs show white at the scan's brightness while the camera's
-       exposure and white balance are set for them: by
-       :func:`treemap.cameras.check.fix_exposure` for the Android camera, or by the
-       phone's page, which ``camera_ready`` waits for.
+    2. **exposure**: the camera's exposure and white balance are set for the LEDs: by
+       :func:`treemap.cameras.check.fix_exposure` for the Android camera (LEDs white),
+       or by the phone's page, which ``camera_ready`` waits for (LEDs in the code's
+       colours, :func:`treemap.cameras.check.mixed`, so the dimmest colour counts).
     3. **colours**: how the camera sees each colour of the code at that exposure is
        measured and saved, as ``treemap camera check`` does. If too few LEDs were seen,
        the last measurement is used.
@@ -154,7 +154,7 @@ def prepare_camera(
     """
     import time
 
-    from treemap.cameras.check import SYNC, fix_exposure, solid
+    from treemap.cameras.check import SYNC, fix_exposure, mixed, solid
 
     brightness = cfg.scan.brightness
     glow = solid(output.led_count, SYNC, max(brightness // 4, 8))
@@ -167,7 +167,7 @@ def prepare_camera(
 
     if camera_ready is not None:  # the phone's page sets its own camera
         on_update({"round": 0, "phase": "exposure"})
-        output.show(solid(output.led_count, SYNC, brightness))
+        output.show(mixed(output.led_count, brightness))
         ready = camera_ready(check_cancel)
         if ready.get("message"):
             on_message(ready["message"])
@@ -194,7 +194,7 @@ def _measure_colours(
 ) -> ColourModel | None:
     """Step 3 of :func:`prepare_camera`. The page's frames arrive in batches up to half
     a second late, hence its longer ``settle_s``."""
-    from treemap.cameras.check import COLOURS, GOOD_SHARE, advice, colour_check
+    from treemap.cameras.check import COLOURS, advice, colour_check
 
     sample_s = 1.5
     brightness = cfg.scan.brightness
@@ -207,12 +207,13 @@ def _measure_colours(
     results, model = colour_check(camera, output, brightness, settle_s, sample_s, on_colour)
     check_cancel()
     seen = model is not None and min(r.blobs for r in results) >= 10
+    tips = advice(None, None, results, model, brightness)
     on_update({"round": 0, "phase": "colours", "remaining": 0, "colours": {
-        "ok": seen and all(r.share >= GOOD_SHARE for r in results),
+        "ok": seen and not tips,
         "read_right": {r.name: None if r.share != r.share else round(r.share, 3)
                        for r in results},
         "seen": {r.name: r.blobs for r in results},
-        "tips": advice(None, None, results, model, brightness),
+        "tips": tips,
     }})
     if seen:
         save_colours(cfg, model, results, camera_id, settings)

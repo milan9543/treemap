@@ -28,11 +28,19 @@ SYMBOL_NAMES = {0: "red", 1: "green", 2: "blue", SYNC: "white", -1: "unclear"}
 MIN_FPS = 15.0  # below this, a symbol of scan.symbol_ms (150) gets too few frames
 GOOD_SHARE = 0.85  # of blobs read as the right colour (the check digit and votes do the rest)
 NEAR_WHITE = 0.06  # chromaticity distance below which a colour is hard to tell from white
+DIM_SHARE = 0.7  # a colour seen in fewer LEDs than this share of white's is too dim
 
 
 def solid(n: int, symbol: int, brightness: int) -> np.ndarray:
     """Every LED showing one symbol's colour at the scan's brightness."""
     return np.tile(np.round(SYMBOL_RGB[symbol] * brightness).astype(np.uint8), (n, 1))
+
+
+def mixed(n: int, brightness: int) -> np.ndarray:
+    """Every LED in one of the code's colours, in turn along the strip (red, green, blue,
+    white, red, …), at the scan's brightness: an exposure that shows all of them shows
+    the dimmest colour too, which white alone doesn't tell."""
+    return np.round(SYMBOL_RGB[np.arange(n) % len(COLOURS)] * brightness).astype(np.uint8)
 
 
 def read_for(camera: Camera, seconds: float) -> list:
@@ -163,6 +171,12 @@ def advice(fps: float | None, size: tuple[int, int] | None, results: list[Colour
     if few:
         tips.append(f"few LEDs seen in {', '.join(few)}: point the phone at the LEDs, from "
                     "close enough that they don't blur together.")
+    white = next((r.blobs for r in results if r.name == "white"), 0)
+    for r in results:
+        if r.name != "white" and r.name not in few and r.blobs < DIM_SHARE * white:
+            tips.append(f"{r.name} looks dim to the camera: {r.blobs} LEDs seen, against "
+                        f"{white} in white, so LEDs are lost while they show it. A longer "
+                        f"exposure or a higher scan.brightness (now {brightness}) helps.")
     if model is not None:
         for name in ("red", "green", "blue"):
             if model.distance(name, "white") < NEAR_WHITE:

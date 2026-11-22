@@ -5,12 +5,17 @@
   // result on the LEDs) and this page films for it: frames go up every 250 ms for as
   // long as the scan runs, and its state is polled once a second. When the server
   // reaches the "exposure" phase, the page sets the camera's exposure for the LEDs
-  // (exposure.ts) and says when it's done; the server then measures the colours.
+  // (exposure.ts: found automatically, or the one last used with this camera), then
+  // lets the user tap another exposure to try it; Continue (or 5 s untouched) tells the
+  // server it's done, and the server measures the colours.
   import { onDestroy, onMount } from "svelte";
   import LedStatus from "../components/LedStatus.svelte";
   import { ApiError, type Api, type Phase, type ScanState } from "../lib/api";
   import { cameraName, openRearCamera, type Camera } from "../lib/camera";
-  import { autoExposure, cameraId, cameraSettings, Gone, setExposure, type Step } from "../lib/exposure";
+  import {
+    autoExposure, cameraId, cameraSettings, canSetExposure, describe, Gone, saveExposure,
+    savedExposure, setExposure, stepName, tryStep, useExposure, type Exposure, type Probe, type Step,
+  } from "../lib/exposure";
   import { app } from "../lib/state.svelte";
   import { Uploader } from "../lib/uploader.svelte";
 
@@ -29,7 +34,18 @@
   let phaseKey = "";
   let exposingFor: number | null = null; // the scan whose exposure this page has set (or is setting)
   let steps = $state<Step[]>([]); // the exposures tried, and the LEDs each showed
-  let exposure = $state<{ message: string; ok: boolean } | null>(null);
+  let exposure = $state<Exposure | null>(null);
+  let problem = $state<string | null>(null); // the exposure couldn't be set
+  let picking = $state(false); // waiting for the user to keep this exposure or try another
+  let touched = $state(false); // they tried another: no more auto-continue
+  let trying = $state<number | null>(null); // the step being tried
+  let left = $state(0); // seconds until it continues by itself
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let camId = $state<string | null>(null);
+  let lastUsed = $state<{ ms: number; iso: number | null } | null>(null);
+  let useLast = $state(false);
+  let howFound = "";
+  const AUTO_CONTINUE_S = 5;
   let alive = true;
   let polling = false;
   let wake: WakeLockSentinel | null = null;
@@ -57,7 +73,7 @@
       case "solving":
         return "Keep the camera on the LEDs.";
       case "exposure":
-        return "Hold the phone still with the LEDs in view while it finds the right exposure.";
+        return "Hold the phone still with all the LEDs in view while it finds an exposure that shows every colour.";
       case "colours":
         return "Keep holding still: the LEDs show red, green, blue and white in turn.";
       case "status":
@@ -83,6 +99,8 @@
         return;
       }
       cam = c;
+      camId = await cameraId(c.label);
+      lastUsed = canSetExposure(c.track) ? savedExposure(camId) : null;
       video!.srcObject = c.stream;
       await video!.play().catch(() => {});
       film();
@@ -119,12 +137,12 @@
     error = null;
     shown = false;
     try {
-      const camera = cam ? await cameraId(cam.label) : undefined;
-      const { id } = await api.scanStart({ shape: app.shape, camera });
+      const { id } = await api.scanStart({ shape: app.shape, camera: camId ?? undefined });
       st = null;
       phaseKey = "";
       steps = [];
       exposure = null;
+      problem = null;
       follow(id);
       void keepAwake();
     } catch (e) {
@@ -176,29 +194,98 @@
     polling = false;
   }
 
-  /** The server waits in the "exposure" phase, LEDs white, for this. */
+  /** The server waits in the "exposure" phase, the LEDs in the code's colours, for this. */
   async function setUp(id: number) {
     exposingFor = id;
     steps = [];
     exposure = null;
-    let done: { message: string; settings: Record<string, unknown> };
+    problem = null;
     try {
       if (!cam) throw new Error("The camera is off.");
-      const r = await setExposure(cam.track, {
-        probe: (since) => api.exposureProbe(since),
-        mark: () => up.mark(),
-        onStep: (s) => (steps = s),
-        alive: () => alive && mine === id && !stopping,
-      });
-      exposure = { message: r.message, ok: r.ok };
-      done = r;
+      const p = probe(id);
+      const last = useLast ? lastUsed : null;
+      howFound = last ? "last used" : "found automatically";
+      const r = last ? await useExposure(cam.track, last) : await setExposure(cam.track, p);
+      exposure = r;
+      steps = r.steps;
+      if (r.chosen === null) { // nothing to choose from: auto exposure, locked or not
+        if (!r.ok) problem = r.message;
+        await ready({ message: r.message, settings: r.settings });
+        return;
+      }
+      if (!r.ok) problem = r.message;
+      if (last) await tryChosen(r.chosen, p); // its count, for comparison
+      startPicking();
     } catch (e) {
       if (e instanceof Gone || (e as ApiError).status === 409) return; // the scan moved on
       const msg = (e as Error).message;
-      exposure = { message: `Couldn't set the exposure: ${msg}`, ok: false };
-      done = { message: `the page couldn't set the exposure: ${msg}`,
-               settings: cam ? cameraSettings(cam.track) : {} };
+      problem = `Couldn't set the exposure: ${msg}`;
+      await ready({ message: `the page couldn't set the exposure: ${msg}`,
+                    settings: cam ? cameraSettings(cam.track) : {} });
     }
+  }
+
+  function probe(id: number): Probe {
+    return {
+      probe: (since) => api.exposureProbe(since),
+      mark: () => up.mark(),
+      onStep: (s) => (steps = s),
+      alive: () => alive && mine === id && !stopping,
+    };
+  }
+
+  function startPicking() {
+    picking = true;
+    touched = false;
+    left = AUTO_CONTINUE_S;
+    clearInterval(timer);
+    timer = setInterval(() => {
+      if (touched || trying !== null) return;
+      left -= 1;
+      if (left <= 0) void keep();
+    }, 1000);
+  }
+
+  function stopPicking() {
+    picking = false;
+    trying = null;
+    clearInterval(timer);
+  }
+
+  async function tryChosen(i: number, p: Probe) {
+    trying = i;
+    try {
+      const leds = await tryStep(cam!.track, steps[i], p);
+      steps = steps.map((s, j) => (j === i ? { ...s, leds } : s));
+      exposure = { ...exposure!, steps, chosen: i, ok: true, settings: cameraSettings(cam!.track) };
+      problem = null;
+    } finally {
+      trying = null;
+    }
+  }
+
+  /** Try another exposure: the preview and its count follow. */
+  async function pick(i: number) {
+    if (!picking || trying !== null || !cam || mine === null) return;
+    touched = true;
+    try {
+      await tryChosen(i, probe(mine));
+    } catch (e) {
+      if (!(e instanceof Gone)) error = (e as Error).message;
+    }
+  }
+
+  /** Keep the exposure that's set and go on to the colours. */
+  async function keep() {
+    if (!picking || !exposure || exposure.chosen === null || !cam) return;
+    stopPicking();
+    const s = exposure.steps[exposure.chosen];
+    if (camId && s.leds) saveExposure(camId, s);
+    const how = touched ? "picked by hand" : howFound;
+    await ready({ message: describe(exposure, how), settings: cameraSettings(cam.track) });
+  }
+
+  async function ready(done: { message: string; settings: Record<string, unknown> }) {
     try {
       await api.cameraReady(done); // the scan goes on, even after a failure
     } catch (e) {
@@ -207,7 +294,9 @@
   }
 
   async function finish() {
+    stopPicking();
     if (cam) void autoExposure(cam.track); // a brighter preview between scans
+    if (camId && cam && canSetExposure(cam.track)) lastUsed = savedExposure(camId);
     await up.stop();
     await wake?.release().catch(() => {});
     wake = null;
@@ -260,6 +349,7 @@
 
   onDestroy(() => {
     alive = false;
+    clearInterval(timer);
     document.removeEventListener("visibilitychange", onVisible);
     up.dispose();
     cam?.stream.getTracks().forEach((t) => t.stop());
@@ -333,6 +423,12 @@
       {#if app.info?.map?.fits}
         <p class="small muted">This replaces the current map.</p>
       {/if}
+      {#if lastUsed}
+        <label class="check small">
+          <input type="checkbox" bind:checked={useLast} />
+          <span>Use the last exposure ({stepName(lastUsed)}) instead of finding it again</span>
+        </label>
+      {/if}
       <button class="primary wide" disabled={!cam || starting} onclick={start}>
         {starting ? "Starting…" : "Start the scan"}
       </button>
@@ -350,13 +446,24 @@
       <p class="hint">{hint(st?.phase ?? null)}</p>
       {#if st?.phase === "exposure" && steps.length}
         <div class="steps num small" aria-live="polite">
-          {#each steps as s (s.ms)}
-            <span class:tried={s.leds !== null}>{s.ms} ms<b>{s.leds ?? "…"}</b></span>
+          {#each steps as s, i (i)}
+            <button class:tried={s.leds !== null} class:chosen={picking && exposure?.chosen === i}
+                    disabled={!picking || trying !== null} onclick={() => pick(i)}>
+              {s.ms} ms{s.iso && s.iso !== steps[0].iso ? ` · ISO ${s.iso}` : ""}
+              <b>{trying === i ? "…" : (s.leds ?? "–")}</b>
+            </button>
           {/each}
         </div>
+        {#if picking}
+          <p class="small muted">The highlighted exposure is set; the numbers are LEDs seen.
+            Tap another to try it: brighter shows dim LEDs, darker keeps colours clean.</p>
+          <button class="primary wide" disabled={trying !== null} onclick={keep}>
+            {touched ? "Use this exposure" : `Continue (${left})`}
+          </button>
+        {/if}
       {/if}
-      {#if exposure && !exposure.ok && st?.round === 0}
-        <div class="note warn">{exposure.message}</div>
+      {#if problem && st?.round === 0}
+        <div class="note warn">{problem}</div>
       {/if}
       {#if st?.colours && (st.phase === "colours" || !st.colours.ok)}
         <div class="colours num small">
@@ -472,11 +579,20 @@
   .after { margin: 8px 0 0; text-align: center; }
   .result { margin-top: 12px; }
   .steps, .colours { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
-  .steps span, .colours span {
+  .steps button {
+    min-height: 0; font: inherit; font-weight: 500; display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px; border-radius: 999px; background: var(--surface-2); color: var(--muted);
+    border: 1px solid transparent;
+  }
+  .steps button:disabled { opacity: 1; cursor: default; }
+  .steps button.tried { color: var(--text); }
+  .steps button.chosen { border-color: var(--accent); background: var(--accent-bg); color: var(--text); }
+  .check { display: flex; gap: 10px; align-items: flex-start; margin: 10px 0 0; }
+  .check input { margin-top: 3px; }
+  .colours span {
     display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
     background: var(--surface-2); color: var(--muted);
   }
-  .steps span.tried { color: inherit; }
   .steps b { font-weight: 600; }
   .colours span.low { color: var(--bad); }
   .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
