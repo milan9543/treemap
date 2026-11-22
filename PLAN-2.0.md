@@ -283,6 +283,20 @@ Still to check on the phone: 4.3's 85% bar.
 
 ## Phase 5: review, front and bottom
 
+**Built** (2026-11-22): the page's **Review** screen ([scanapp/src/screens/Review.svelte](scanapp/src/screens/Review.svelte)),
+opened after a scan or from the connect screen. Not yet tried on the phone. Changes from the sketch:
+- Each solve picks its own heading, so solving again (a fix, or more rounds) first turns
+  the new positions onto the old map's, using the LEDs ok in both, then keeps its
+  orientation (`follow` in [treemap/scan/free.py](treemap/scan/free.py)). A fresh scan resets it.
+- The flat orientation is a mirror, then quarter turns anticlockwise, and the map is
+  normalised again (y 0–1) after turning.
+- `edge` lights the bottom edge white and the left side red, so the mirror can be checked.
+- Ignoring an LED's readings only helps a *misplaced* LED: a red one has no readings to
+  drop. So red and yellow runs light blue and offer "scan this part again"
+  (`scan/start` with `add`, which keeps the rounds so far), and a separate card ignores a
+  misplaced LED's readings (`POST /map/interpolate`), found with a rising plane.
+- New: `GET /map`; `led` mode takes `to` and `neighbours`.
+
 - **5.1 Map format v2.** `orientation` alongside the positions; `Geometry.of` applies it;
   v1 maps still load (orientation 0).
 - **5.2 Stripe and edge LED modes** on the server.

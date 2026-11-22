@@ -10,8 +10,9 @@ Job kinds and their parameters:
   ``symbol_ms`` and ``brightness`` override the config for this scan; ``camera`` (the
   scan page's phone) makes it wait for the page to set the exposure, then measure that
   phone's colours, and waits between rounds for the page to start the next. Starts over
-  (earlier rounds are forgotten) and runs until every LED is ok, the rounds are done, or
-  it's stopped.
+  (earlier rounds are forgotten; with ``add``, they're kept and the scan adds to them, in
+  the shape they were scanned in) and runs until every LED is ok, the rounds are done,
+  or it's stopped.
 * ``reconstruct``: solve again from the saved rounds
 * ``evaluate`` (simulator only)
 * ``interpolate``, ``measure``: ``index``; interpolate ignores that LED's observations
@@ -205,6 +206,11 @@ class Jobs:
                     raise workflow.WorkflowError(f"{key} must be a whole number {lo}-{hi}")
                 changes[key] = p[key]
         cfg.scan = dataclasses.replace(cfg.scan, **changes)
+        add = p.get("add", False)
+        if not isinstance(add, bool):
+            raise workflow.WorkflowError("add must be true or false")
+        if add and (shape := workflow.rounds_shape(cfg)) is not None:
+            cfg.shape = shape  # the rounds so far decide
         camera_id, camera_ready, next_round = self.camera_id, None, None
         if p.get("camera") is not None:
             if self.camera_ready is None:
@@ -217,7 +223,7 @@ class Jobs:
         def run() -> dict:
             workflow.ensure_sim_tree(cfg)
             tree_map = self._with_output(lambda out: workflow.run_scan(
-                cfg, out, rounds=rounds, sim_port=self.sim_port, camera=self.camera,
+                cfg, out, rounds=rounds, fresh=not add, sim_port=self.sim_port, camera=self.camera,
                 camera_id=camera_id, camera_ready=camera_ready, next_round=next_round,
                 on_update=self._on_update, check_cancel=self._check_cancel,
                 on_message=lambda m: self._update(message=m),

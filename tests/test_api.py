@@ -163,6 +163,15 @@ def test_a_scan_through_the_api(serve):
     assert call(base + "/scan/frames", raw=b"\x09\x00\x00\x00abc",
                 ctype="application/octet-stream")[0] == 400
 
+    # An LED in the wrong place: ignore its readings. The map is solved again, and
+    # keeps facing the way it was set to.
+    assert call(base + "/map/orientation", {"front_deg": 120})[0] == 200
+    i = st["led_status"].index("o", 50)
+    status, _, m = call(base + "/map/interpolate", {"index": i})
+    assert status == 200, m
+    assert m["ignored"] == [i] and m["led_status"][i] != "o"
+    assert m["orientation"] == {"front_deg": 120.0}
+
     # A scan stopped before it made a map doesn't pass the old map off as its own.
     assert call(base + "/scan/start", {"rounds": 1})[0] == 202
     call(base + "/scan/stop", {})

@@ -108,6 +108,14 @@ def save_overrides(scan_dir: Path, interpolate: set[int]) -> None:
 NextRound = Callable[[int, Callable[[], None]], bool]
 
 
+def _load_map(path: Path, n: int) -> TreeMap | None:
+    try:
+        m = TreeMap.load(path)
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return m if m.led_count == n else None
+
+
 def read_frame(n: int, read: set[int]) -> np.ndarray:
     """Before there's a map: LEDs read so far in the interpolated colour (found, not yet
     placed), the rest in the failed colour."""
@@ -116,13 +124,46 @@ def read_frame(n: int, read: set[int]) -> np.ndarray:
     return frame
 
 
+MIN_SHARED_TO_FOLLOW = 10  # ok LEDs two solves must share to line one up with the other
+
+
+def follow(tree_map: TreeMap, like: TreeMap | None) -> TreeMap:
+    """``tree_map`` facing the way ``like`` (an earlier solve of the same LEDs) was set
+    to face. Each solve picks its own heading (a tree's θ = 0, a flat layout's up), so
+    the new positions are first turned onto the old ones (round the trunk, or in the
+    plane), using the LEDs ok in both; then ``like``'s orientation applies to them as
+    it did. Without an orientation to keep, or enough LEDs in common, the map stays as
+    solved."""
+    if like is None or like.orientation is None or like.shape != tree_map.shape \
+            or like.led_count != tree_map.led_count:
+        return tree_map
+    both = ((tree_map.status == "ok") & (like.status == "ok")
+            & np.isfinite(tree_map.positions).all(axis=1) & np.isfinite(like.positions).all(axis=1))
+    if both.sum() < MIN_SHARED_TO_FOLLOW:
+        return tree_map
+    flat = tree_map.shape == "flat"
+    axes = [0, 1] if flat else [0, 2]
+    b = tree_map.positions[both][:, axes]
+    a = like.positions[both][:, axes]
+    b, a = b - b.mean(axis=0), a - a.mean(axis=0)
+    turn = np.arctan2((b[:, 0] * a[:, 1] - b[:, 1] * a[:, 0]).sum(), (b * a).sum())
+    c, s_ = np.cos(turn), np.sin(turn)
+    P = tree_map.positions.copy()
+    u, v = P[:, axes[0]].copy(), P[:, axes[1]].copy()
+    P[:, axes[0]], P[:, axes[1]] = c * u - s_ * v, s_ * u + c * v
+    if flat:  # turned in the plane: y 0-1 again
+        P = normalise(P, tree_map.status)
+    return TreeMap(P, tree_map.status, {**tree_map.meta, "orientation": like.orientation})
+
+
 def build_map(rounds: list[Round], led_count: int, interpolate: set[int] = frozenset(),
-              shape: str = "tree") -> tuple[TreeMap, sfm.SfmResult]:
+              shape: str = "tree", like: TreeMap | None = None) -> tuple[TreeMap, sfm.SfmResult]:
     """All rounds' observations -> positions -> cleanup -> normalised :class:`TreeMap`.
 
     ``shape`` "tree" solves 3D positions (:mod:`treemap.scan.sfm`), "flat" 2D ones on a
     plane (:mod:`treemap.scan.planar`). LEDs in ``interpolate`` ignore their observations
-    and are filled from neighbours.
+    and are filled from neighbours. ``like``, an earlier map of these rounds, keeps the
+    way it was set to face (see :func:`follow`).
     Raises :class:`sfm.SfmError` if there isn't enough to solve.
     """
     rounds = [r for r in rounds if len(r.frame)]
@@ -158,7 +199,7 @@ def build_map(rounds: list[Round], led_count: int, interpolate: set[int] = froze
         "forced_interpolate": sorted(interpolate),
         "views": res.views.tolist(),
     }
-    return TreeMap(P, status, meta), res
+    return follow(TreeMap(P, status, meta), like), res
 
 
 # -- scanning ---------------------------------------------------------------------------
@@ -255,7 +296,8 @@ def scan(
     if fresh:
         clear_rounds(s.scan_dir)
     saved = load_rounds(s.scan_dir)
-    tree_map: TreeMap | None = None
+    # more rounds for the same map: it keeps the way it was set to face
+    tree_map: TreeMap | None = None if fresh else _load_map(s.map_path, n)
     dim = np.full((n, 3), max(s.brightness // 6, 4), dtype=np.uint8)
 
     last_round = len(saved) + (rounds or s.max_rounds) - 1
@@ -300,7 +342,7 @@ def scan(
             saved.append(rnd)
         message = ""
         try:
-            tree_map, res = build_map(saved, n, load_overrides(s.scan_dir), s.shape)
+            tree_map, res = build_map(saved, n, load_overrides(s.scan_dir), s.shape, tree_map)
             tree_map.save(s.map_path)
         except (sfm.SfmError, ScanError) as e:
             message = str(e)

@@ -5,6 +5,13 @@ at the same scale, and the axes follow the scan's angle convention (θ = 0 looks
 +z, with +x to the right). Every LED has a status: ``ok`` (measured),
 ``interpolated`` (filled from its neighbours on the strip) or ``failed`` (a rough
 guess). A position is null only when there was nothing to guess from.
+
+Format 2 adds ``orientation``: which way the solved positions face the room, set by the
+user after a scan and applied by :meth:`Geometry.of`, so the positions stay as solved
+and the orientation can change without scanning again. A tree has ``{"front_deg"}``:
+the angle (θ, as solved) that faces the room. A flat layout has ``{"rotate_deg",
+"mirror"}``: mirrored left to right first (filmed from behind), then turned
+anticlockwise in quarter turns. Format 1 maps load as facing the way they were solved.
 """
 
 from __future__ import annotations
@@ -17,8 +24,57 @@ from typing import Any
 
 import numpy as np
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+READS = (1, 2)  # formats this code reads
 STATUSES = ("ok", "interpolated", "failed")
+QUARTER_TURNS = (0, 90, 180, 270)
+
+
+def check_orientation(value: Any, shape: str) -> dict[str, Any]:
+    """A valid orientation for a map of ``shape`` (see the module docs), normalised:
+    ``front_deg`` to 0-360, rounded to a tenth. Raises ValueError saying what's wrong."""
+    if not isinstance(value, dict):
+        raise ValueError("orientation must be an object")
+    if shape == "flat":
+        unknown = set(value) - {"rotate_deg", "mirror"}
+        turn, mirror = value.get("rotate_deg", 0), value.get("mirror", False)
+        if unknown or isinstance(turn, bool) or turn not in QUARTER_TURNS or not isinstance(mirror, bool):
+            raise ValueError('a flat map turns by {"rotate_deg": 0, 90, 180 or 270, "mirror": '
+                             "true or false}")
+        return {"rotate_deg": int(turn), "mirror": mirror}
+    front = value.get("front_deg", 0)
+    if set(value) - {"front_deg"} or isinstance(front, bool) or not isinstance(
+            front, (int, float)) or not np.isfinite(front):
+        raise ValueError('a tree turns by {"front_deg": the angle that faces the room}')
+    return {"front_deg": round(float(front) % 360, 1) % 360}
+
+
+def orient(positions: np.ndarray, status: np.ndarray, orientation: dict[str, Any] | None,
+           shape: str = "tree") -> np.ndarray:
+    """``positions`` (N, 3) as they face the room. A tree turns round the trunk, so the
+    LEDs at ``front_deg`` come to the front (+z). A flat layout is mirrored and turned,
+    then normalised again (y 0-1 over the ok LEDs, x centred on them), as a new scan
+    would have made it."""
+    if not orientation:
+        return positions
+    P = np.array(positions, dtype=float)
+    if shape == "flat":
+        if orientation.get("mirror"):
+            P[:, 0] = -P[:, 0]
+        a = np.radians(orientation.get("rotate_deg", 0))
+        x, y = P[:, 0].copy(), P[:, 1].copy()
+        P[:, 0], P[:, 1] = x * np.cos(a) - y * np.sin(a), x * np.sin(a) + y * np.cos(a)
+        valid = np.isfinite(P).all(axis=1)
+        ref = valid & (status == "ok") if (valid & (status == "ok")).any() else valid
+        if ref.any():
+            y0, y1 = P[ref, 1].min(), P[ref, 1].max()
+            scale = y1 - y0 if y1 > y0 else 1.0
+            P = (P - [P[ref, 0].mean(), y0, 0.0]) / scale
+        return P
+    a = np.radians(orientation.get("front_deg", 0))
+    x, z = P[:, 0].copy(), P[:, 2].copy()
+    P[:, 0], P[:, 2] = x * np.cos(a) - z * np.sin(a), x * np.sin(a) + z * np.cos(a)
+    return P
 
 
 @dataclass(frozen=True)
@@ -47,7 +103,10 @@ class Geometry:
     status: np.ndarray
 
     @classmethod
-    def of(cls, positions: np.ndarray, status: np.ndarray) -> Geometry:
+    def of(cls, positions: np.ndarray, status: np.ndarray,
+           orientation: dict[str, Any] | None = None, shape: str = "tree") -> Geometry:
+        """The geometry of ``positions`` turned to face the room (see :func:`orient`)."""
+        positions = orient(positions, status, orientation, shape)
         valid = np.isfinite(positions).all(axis=1)
         xyz = np.where(valid[:, None], positions, 0.0).astype(np.float32)
         x, y, z = xyz.T
@@ -70,10 +129,26 @@ class TreeMap:
     def led_count(self) -> int:
         return len(self.positions)
 
+    @property
+    def shape(self) -> str:
+        return self.meta.get("shape", "tree")
+
+    @property
+    def orientation(self) -> dict[str, Any] | None:
+        return self.meta.get("orientation")
+
     @cached_property
     def geometry(self) -> Geometry:
-        """Cylindrical and front-view coordinates for effects (computed once per map)."""
-        return Geometry.of(self.positions, self.status)
+        """Cylindrical and front-view coordinates for effects, turned to face the room
+        (computed once per map)."""
+        return Geometry.of(self.positions, self.status, self.orientation, self.shape)
+
+    def turned(self, orientation: dict[str, Any] | None) -> TreeMap:
+        """The same map facing another way (None: as solved). Raises ValueError."""
+        meta = {k: v for k, v in self.meta.items() if k != "orientation"}
+        if orientation is not None:
+            meta["orientation"] = check_orientation(orientation, self.shape)
+        return TreeMap(self.positions, self.status, meta)
 
     def counts(self) -> dict[str, int]:
         return {s: int((self.status == s).sum()) for s in STATUSES}
@@ -96,7 +171,7 @@ class TreeMap:
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> TreeMap:
-        if d.get("version") != FORMAT_VERSION:
+        if d.get("version") not in READS:
             raise ValueError(f"unsupported tree map version {d.get('version')!r}; rerun reconstruct")
         positions = np.array(
             [p if p is not None else [np.nan] * 3 for p in d["positions"]], dtype=float
@@ -105,7 +180,12 @@ class TreeMap:
         if len(status) != len(positions):
             raise ValueError("positions and status differ in length")
         reserved = {"version", "led_count", "counts", "positions", "status"}
-        return cls(positions, status, {k: v for k, v in d.items() if k not in reserved})
+        meta = {k: v for k, v in d.items() if k not in reserved}
+        if meta.get("orientation") is not None:
+            meta["orientation"] = check_orientation(meta["orientation"], meta.get("shape", "tree"))
+        else:
+            meta.pop("orientation", None)
+        return cls(positions, status, meta)
 
     def save(self, path: str | Path) -> None:
         path = Path(path)
@@ -117,6 +197,14 @@ class TreeMap:
     @classmethod
     def load(cls, path: str | Path) -> TreeMap:
         return cls.from_dict(json.loads(Path(path).read_text()))
+
+
+def saved_orientation(path: str | Path) -> dict[str, Any] | None:
+    """The orientation of the map at ``path``, if there's a readable one."""
+    try:
+        return TreeMap.load(path).orientation
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
 
 
 class MapFile:

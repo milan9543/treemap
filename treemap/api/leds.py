@@ -8,11 +8,21 @@ Commands (JSON), ``color`` being a name, ``#rrggbb`` or ``[r, g, b]``:
 * ``{"mode": "off"}``
 * ``{"mode": "white", "level": 96}``: every LED white, level 1-255
 * ``{"mode": "solid", "color": "red"}``
-* ``{"mode": "led", "index": 12, "color": "white"}``: one LED, the rest off
+* ``{"mode": "led", "index": 12, "color": "white"}``: one LED, the rest off; with
+  ``"to": 15``, LEDs 12 to 15; with ``"neighbours": true``, the two LEDs either side
+  glow dim white, to show where on the strip it is
 * ``{"mode": "chase", "color": "white", "width": 3, "speed": 20, "loop": false}``: a
   light running from LED 0 to the last, ``speed`` LEDs a second
 * ``{"mode": "status"}``: every LED in its map status colour (green ok, yellow
   interpolated, red failed)
+* ``{"mode": "stripe", "front_deg": 40, "width_deg": 30, "color": "white"}``: a tree
+  map's front, as a vertical stripe of LEDs facing that way (``front_deg`` as in the
+  map's ``orientation``; without it, the map's own front)
+* ``{"mode": "edge", "rotate_deg": 90, "mirror": false}``: a flat map's bottom edge in
+  white and its left side in red, as they'd be with that orientation (without one,
+  the map's own)
+
+The last three need a map for these LEDs.
 """
 
 from __future__ import annotations
@@ -24,10 +34,14 @@ from typing import Any
 
 import numpy as np
 
+from treemap.mapping.model import TreeMap
+from treemap.mapping.quality import NEIGHBOUR_LEVELS, status_frame
 from treemap.outputs.base import LedOutput
-from treemap.patterns import black, chase_frames, parse_color, single
+from treemap.patterns import black, chase_frames, parse_color
 
-MODES = ("off", "white", "solid", "led", "chase", "status")
+MODES = ("off", "white", "solid", "led", "chase", "status", "stripe", "edge")
+EDGE = 0.12  # the share of the layout's height (width) lit as its bottom (left) edge
+TRUNK = 0.15  # LEDs this close to the trunk (share of the widest) have no clear angle
 
 
 class CommandError(ValueError):
@@ -60,11 +74,43 @@ def _number(cmd: dict, key: str, default: float, lo: float, hi: float) -> float:
     return float(v)
 
 
+def _turned(tree_map: TreeMap, cmd: dict, keys: tuple[str, ...]) -> TreeMap:
+    """The map facing the way the command asks (as saved, if it doesn't say)."""
+    asked = {k: cmd[k] for k in keys if k in cmd}
+    if not asked:
+        return tree_map
+    try:
+        return tree_map.turned(asked)
+    except ValueError as e:
+        raise CommandError(str(e)) from None
+
+
+def stripe_frame(tree_map: TreeMap, width_deg: float, rgb) -> np.ndarray:
+    """The LEDs facing the front, ``width_deg`` wide round the trunk."""
+    g = tree_map.geometry
+    reach = float(g.r[g.valid].max()) if g.valid.any() else 0.0
+    lit = g.valid & (np.abs(np.degrees(g.theta)) <= width_deg / 2) & (g.r > TRUNK * reach)
+    frame = black(tree_map.led_count)
+    frame[lit] = rgb
+    return frame
+
+
+def edge_frame(tree_map: TreeMap) -> np.ndarray:
+    """The bottom edge white and the left side red (the left wins in the corner)."""
+    g = tree_map.geometry
+    span = np.maximum(g.hi - g.lo, 1e-6)
+    near = (g.xyz - g.lo) / span  # 0 at the bottom (left), 1 at the top (right)
+    frame = black(tree_map.led_count)
+    frame[g.valid & (near[:, 1] <= EDGE)] = (200, 200, 200)
+    frame[g.valid & (near[:, 0] <= EDGE)] = (255, 0, 0)
+    return frame
+
+
 class LedCommands:
-    def __init__(self, output: LedOutput, status_frame: Callable[[], np.ndarray]) -> None:
+    def __init__(self, output: LedOutput, load_map: Callable[[], TreeMap]) -> None:
         self.output = output
         self.n = output.led_count
-        self.status_frame = status_frame  # the current map's status colours
+        self.load_map = load_map  # the current map; raises CommandError if there isn't one
         self.mode: str | None = None  # what's showing
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -87,10 +133,32 @@ class LedCommands:
         elif mode == "led":
             if "index" not in cmd:
                 raise CommandError("led needs an index")
-            frame = single(self.n, _int(cmd, "index", 0, 0, self.n - 1),
-                           _color(cmd.get("color", "white")))
+            first = _int(cmd, "index", 0, 0, self.n - 1)
+            last = _int(cmd, "to", first, first, self.n - 1)
+            neighbours = cmd.get("neighbours", False)
+            if not isinstance(neighbours, bool):
+                raise CommandError("neighbours must be true or false")
+            frame = black(self.n)
+            if neighbours:
+                for dist, level in enumerate(NEIGHBOUR_LEVELS, 1):
+                    for j in (first - dist, last + dist):
+                        if 0 <= j < self.n:
+                            frame[j] = level
+            frame[first:last + 1] = _color(cmd.get("color", "white"))
         elif mode == "status":
-            frame = self.status_frame()
+            frame = status_frame(self.load_map())
+        elif mode == "stripe":
+            tree_map = self.load_map()
+            if tree_map.shape != "tree":
+                raise CommandError("the map is of a flat layout: show its edge instead")
+            frame = stripe_frame(_turned(tree_map, cmd, ("front_deg",)),
+                                 _number(cmd, "width_deg", 30, 2, 180),
+                                 _color(cmd.get("color", "white")))
+        elif mode == "edge":
+            tree_map = self.load_map()
+            if tree_map.shape != "flat":
+                raise CommandError("the map is of a tree: show its front (stripe) instead")
+            frame = edge_frame(_turned(tree_map, cmd, ("rotate_deg", "mirror")))
         else:  # chase
             rgb = _color(cmd.get("color", "white"))
             width = _int(cmd, "width", 3, 1, 100)

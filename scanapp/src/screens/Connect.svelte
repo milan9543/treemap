@@ -150,6 +150,14 @@
           <button class="primary" onclick={() => (app.screen = "wiring")}>Check the wiring</button>
         </div>
       </section>
+      {#if info.map?.fits}
+        <section class="card">
+          <h2>The current map</h2>
+          <p class="small muted">Fix missing LEDs, or set which way it faces, without scanning again.</p>
+          <button class="wide" onclick={() => { app.shape = info.map!.shape; app.screen = "review"; }}>
+            Review the map</button>
+        </section>
+      {/if}
     {/if}
   {/if}
 </main>

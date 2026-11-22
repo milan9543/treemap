@@ -93,6 +93,7 @@ def run_scan(
     output: LedOutput,
     *,
     rounds: int | None = None,
+    fresh: bool = True,
     sim_port: int | None = None,
     camera: Camera | None = None,
     camera_id: str | None = None,
@@ -102,9 +103,10 @@ def run_scan(
     check_cancel: Callable[[], None] = lambda: None,
     on_message: Callable[[str], None] = lambda m: None,
 ) -> TreeMap | None:
-    """Scan from scratch, in rounds (see :mod:`treemap.scan.free`), with the configured
-    camera, or ``camera`` (named ``camera_id`` for its measured colours). Earlier rounds
-    are forgotten; the rounds of this scan build on each other.
+    """Scan in rounds (see :mod:`treemap.scan.free`), with the configured camera, or
+    ``camera`` (named ``camera_id`` for its measured colours). Earlier rounds are
+    forgotten (unless not ``fresh``: then this scan adds to them, to scan parts again);
+    the rounds of this scan build on each other.
 
     First the camera gets ready (:func:`prepare_camera`: a countdown, then the camera's
     exposure and colours). ``on_update`` gets progress dicts, ``round`` 0 while getting
@@ -125,7 +127,7 @@ def run_scan(
         try:
             colours = prepare_camera(cfg, camera, output, on_update, check_cancel, on_message,
                                      camera_id, camera_ready)
-            return scan(output, camera, scan_settings(cfg, colours), fresh=True, rounds=rounds,
+            return scan(output, camera, scan_settings(cfg, colours), fresh=fresh, rounds=rounds,
                         on_update=on_update, check_cancel=check_cancel, next_round=next_round)
         except (ScanError, CameraUnavailable) as e:
             raise WorkflowError(str(e)) from None
@@ -249,17 +251,33 @@ def save_colours(cfg: Config, model: ColourModel, results: list, camera_id: str 
 
 
 def rebuild_map(cfg: Config) -> tuple[TreeMap, SfmResult]:
-    """Solve again from the saved rounds (honouring ``fix`` overrides) and save the map."""
+    """Solve again from the saved rounds (honouring ``fix`` overrides) and save the map,
+    facing the way the map it replaces was set to face."""
+    from treemap.mapping.model import TreeMap
     from treemap.scan.free import ScanError, build_map, load_overrides, load_rounds
     from treemap.scan.sfm import SfmError
 
     try:
+        before = TreeMap.load(cfg.map_path)  # keeps the way it was set to face
+    except (OSError, ValueError, KeyError, TypeError):
+        before = None
+    try:
         tree_map, res = build_map(load_rounds(cfg.scan_dir), cfg.led_count,
-                                  load_overrides(cfg.scan_dir), cfg.shape)
+                                  load_overrides(cfg.scan_dir), cfg.shape, before)
     except (ScanError, SfmError) as e:
         raise WorkflowError(f"can't reconstruct from {cfg.scan_dir}: {e}") from None
     tree_map.save(cfg.map_path)
     return tree_map, res
+
+
+def rounds_shape(cfg: Config) -> str | None:
+    """The shape the saved rounds were scanned as (that of the map they made), if any."""
+    from treemap.mapping.model import TreeMap
+
+    try:
+        return TreeMap.load(cfg.map_path).shape
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def map_summary(tree_map: TreeMap) -> dict:

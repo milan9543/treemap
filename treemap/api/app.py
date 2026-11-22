@@ -5,8 +5,9 @@ GET     /info             API and server version, the LEDs and controllers, the 
                           map, what's using the LEDs, engine timing, frames received
 POST    /leds             a test pattern (see :mod:`treemap.api.leds`)
 POST    /play             ``{"effect", "params"}``: run an effect
-POST    /scan/start       ``{"shape", "symbol_ms", "brightness", "rounds", "camera"}``,
-                          all optional; ``camera`` names the phone, see below
+POST    /scan/start       ``{"shape", "symbol_ms", "brightness", "rounds", "camera",
+                          "add"}``, all optional; ``camera`` names the phone, see below;
+                          ``add`` keeps the rounds so far, to scan parts again
 POST    /scan/stop        stop the scan; finished rounds are kept
 GET     /scan/state       phase, round, time left, LEDs identified, per-status counts;
                           after a round (and once the scan is done or stopped, if it
@@ -21,6 +22,14 @@ POST    /scan/camera-ready
                           ``{"message", "settings"}``: the phone has set its exposure
 POST    /scan/next        ``{"finish": false}``: the user is in place, start the next
                           round (or, with ``finish``, end the scan here)
+GET     /map              the current map: shape, counts, ``orientation``, ``led_status``
+                          (letters as above), the LEDs whose readings are ignored
+POST    /map/orientation  ``{"front_deg"}`` (tree) or ``{"rotate_deg", "mirror"}``
+                          (flat): which way the map faces (see
+                          :mod:`treemap.mapping.model`); every effect follows it
+POST    /map/interpolate  ``{"index", "interpolate": true}``: ignore an LED's readings
+                          (it's in the wrong place) and fill it from its neighbours, or
+                          (false) use them again; answers once the map is solved again
 ======  ================  ==============================================================
 
 A scan started with ``camera`` (the page sends the phone's model and camera label) sets
@@ -61,7 +70,6 @@ from treemap.effects import EffectContext, ParamError
 from treemap.engine import Engine
 from treemap.jobs import JobRejected, Jobs
 from treemap.mapping.model import TreeMap
-from treemap.mapping.quality import status_frame
 from treemap.mapping.source import MapSource
 from treemap.outputs.base import LedOutput
 
@@ -72,6 +80,7 @@ STATUS_LETTERS = {"ok": "o", "interpolated": "i", "failed": "f"}
 NEXT_TIMEOUT_S = 900.0  # between rounds, for the user; then the scan finishes there
 READY_TIMEOUT_S = 300.0  # for the page to set the phone's exposure (the user may pick one)
 PROBE_TIMEOUT_S = 3.0  # for the frames an exposure probe asks for to arrive
+SOLVE_TIMEOUT_S = 300.0  # for the map to be solved again after a fix
 
 
 class SharedOutput(LedOutput):
@@ -99,7 +108,7 @@ class Api:
             fps=fps, brightness=cfg.engine.brightness, crossfade_s=cfg.engine.crossfade,
             gamma=cfg.gamma,
         )
-        self.leds = LedCommands(output, self._status_frame)
+        self.leds = LedCommands(output, self._map_for_leds)
         self._scan_started: datetime | None = None  # when the latest scan started (UTC)
         self._ready = threading.Event()  # the page has set the phone's exposure
         self._ready_info: dict[str, Any] = {}
@@ -122,6 +131,9 @@ class Api:
             ("POST", "/scan/exposure-probe", self.exposure_probe),
             ("POST", "/scan/camera-ready", self.camera_ready),
             ("POST", "/scan/next", self.scan_next),
+            ("GET", "/map", self.get_map),
+            ("POST", "/map/orientation", self.map_orientation),
+            ("POST", "/map/interpolate", self.map_interpolate),
         ):
             self.router.add(method, PREFIX + path, handler)
 
@@ -141,11 +153,26 @@ class Api:
         except (OSError, ValueError, KeyError):
             return None
 
-    def _status_frame(self) -> np.ndarray:
+    def _map_for_leds(self) -> TreeMap:
         tree_map = self._load_map()
         if tree_map is None or tree_map.led_count != self.n:
             raise CommandError("there's no map for these LEDs yet: scan first")
-        return status_frame(tree_map)
+        return tree_map
+
+    def _map_or_404(self) -> TreeMap:
+        tree_map = self._load_map()
+        if tree_map is None:
+            raise HttpError(404, "there's no map yet: scan first")
+        if tree_map.led_count != self.n:
+            raise HttpError(409, f"the map is for {tree_map.led_count} LEDs, not "
+                                 f"{self.n}: scan again")
+        return tree_map
+
+    @staticmethod
+    def _orientation(tree_map: TreeMap) -> dict[str, Any]:
+        """The map's orientation, with the defaults filled in."""
+        default = {"rotate_deg": 0, "mirror": False} if tree_map.shape == "flat" else {"front_deg": 0.0}
+        return {**default, **(tree_map.orientation or {})}
 
     # -- endpoints ----------------------------------------------------------------------
 
@@ -166,9 +193,10 @@ class Api:
             "map": None if tree_map is None else {
                 "led_count": tree_map.led_count,
                 "fits": tree_map.led_count == self.n,
-                "shape": tree_map.meta.get("shape", "tree"),
+                "shape": tree_map.shape,
                 "created": tree_map.meta.get("created"),
                 "counts": tree_map.counts(),
+                "orientation": self._orientation(tree_map),
             },
             "busy": busy,
             "leds": self.leds.mode,
@@ -203,7 +231,7 @@ class Api:
 
     def scan_start(self, req: Request) -> tuple[int, dict[str, Any]]:
         body = req.json()
-        unknown = set(body) - {"shape", "symbol_ms", "brightness", "rounds", "camera"}
+        unknown = set(body) - {"shape", "symbol_ms", "brightness", "rounds", "camera", "add"}
         if unknown:
             raise HttpError(400, f"unknown setting(s): {', '.join(sorted(unknown))}")
         if self.jobs.busy:
@@ -266,6 +294,47 @@ class Api:
             return {"frames": self.camera.push(req.body)}
         except BatchError as e:
             raise HttpError(400, str(e)) from None
+
+    # -- the map ----------------------------------------------------------------------
+
+    def get_map(self, req: Request) -> dict[str, Any]:
+        m = self._map_or_404()
+        return {
+            "shape": m.shape,
+            "led_count": m.led_count,
+            "created": m.meta.get("created"),
+            "rounds": m.meta.get("rounds"),
+            "counts": m.counts(),
+            "orientation": self._orientation(m),
+            "led_status": "".join(STATUS_LETTERS.get(str(s), "f") for s in m.status),
+            "ignored": sorted(m.meta.get("forced_interpolate", [])),
+        }
+
+    def map_orientation(self, req: Request) -> dict[str, Any]:
+        if self.jobs.busy:
+            raise HttpError(409, f"a {self.jobs.state()['kind']} is changing the map; wait for it")
+        try:
+            self._map_or_404().turned(req.json()).save(self.cfg.map_path)
+        except ValueError as e:
+            raise HttpError(400, str(e)) from None
+        return self.get_map(req)
+
+    def map_interpolate(self, req: Request) -> dict[str, Any]:
+        body = req.json()
+        interpolate = body.get("interpolate", True)
+        if not isinstance(interpolate, bool):
+            raise HttpError(400, "interpolate must be true or false")
+        self._map_or_404()
+        try:
+            self.jobs.start("interpolate" if interpolate else "measure", {"index": body.get("index")})
+        except JobRejected as e:
+            raise HttpError(409 if self.jobs.busy else 400, str(e)) from None
+        if not self.jobs.wait(SOLVE_TIMEOUT_S):
+            raise HttpError(504, "solving the map is taking too long; check it later")
+        st = self.jobs.state()
+        if st["status"] != "done":
+            raise HttpError(500, st.get("error") or "the map couldn't be solved again")
+        return self.get_map(req)
 
     # -- setting the phone up ---------------------------------------------------------
 

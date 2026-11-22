@@ -149,7 +149,8 @@
     error = null;
     shown = false;
     try {
-      const { id } = await api.scanStart({ shape: app.shape, camera: camId ?? undefined });
+      const { id } = await api.scanStart({ shape: app.shape, camera: camId ?? undefined,
+                                           add: app.addRounds || undefined });
       st = null;
       phaseKey = "";
       steps = [];
@@ -348,6 +349,12 @@
     mine = null;
     st = null;
     shown = false;
+    app.addRounds = false;
+  }
+
+  function review() {
+    app.addRounds = false;
+    app.screen = "review";
   }
 
   onMount(async () => {
@@ -423,8 +430,17 @@
   </div>
 
   <section class="panel">
-    {#if view === "ready"}
-      <div class="step">Step 2 of 2</div>
+    {#if view === "ready" && app.addRounds}
+      <div class="step">Step 3 of 3</div>
+      <h2>Scan parts again</h2>
+      <p class="muted small">
+        The rounds so far are kept, and each new round adds to them. Point the phone at the
+        part that's missing{app.shape === "tree" ? ", walking round to it if it's at the back" : ""}.
+        After each round the LEDs show what's found: green found, yellow guessed, red missing.
+      </p>
+      <button class="link" onclick={() => (app.addRounds = false)}>Scan from scratch instead</button>
+    {:else if view === "ready"}
+      <div class="step">Step 2 of 3</div>
       <h2>Scan the {app.shape === "flat" ? "LEDs" : "tree"}</h2>
       <p class="muted small">
         {#if app.shape === "tree"}
@@ -438,7 +454,9 @@
           found, and you start the next round when you're ready.
         {/if}
       </p>
-      {#if app.info?.map?.fits}
+    {/if}
+    {#if view === "ready"}
+      {#if app.info?.map?.fits && !app.addRounds}
         <p class="small muted">This replaces the current map.</p>
       {/if}
       {#if lastUsed}
@@ -541,8 +559,11 @@
         {#if st.led_status}
           <button disabled={shown} onclick={showResult}>{shown ? "On the LEDs" : "Show on the LEDs"}</button>
         {/if}
-        <button class="primary" onclick={again}>Scan again</button>
+        <button class={st.led_status ? "" : "primary"} onclick={again}>Scan again</button>
       </div>
+      {#if st.led_status}
+        <button class="primary wide" onclick={review}>Review the map</button>
+      {/if}
     {/if}
 
     {#if error}<div class="note bad">{error}</div>{/if}

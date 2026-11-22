@@ -64,7 +64,7 @@
 </script>
 
 <main class="page">
-  <TopBar title="Check the wiring" step="Step 1 of 2" back="connect" />
+  <TopBar title="Check the wiring" step="Step 1 of 3" back="connect" />
   <p class="muted">The map numbers the LEDs in the order the data runs through them. Check that
     order before scanning.</p>
 

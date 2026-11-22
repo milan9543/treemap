@@ -17,10 +17,29 @@ export interface Info {
   output: string;
   led_count: number;
   controllers: { host: string; start: number; count: number; reverse: boolean }[];
-  map: null | { led_count: number; fits: boolean; shape: Shape; created: string | null; counts: Counts };
+  map: null | {
+    led_count: number; fits: boolean; shape: Shape; created: string | null; counts: Counts;
+    orientation: Orientation;
+  };
   busy: "scan" | "effect" | "leds" | null;
   leds: string | null;
   effect: string | null;
+}
+
+/** Which way the map faces: a tree's front (the solved angle that faces the room), or a
+ * flat layout mirrored, then turned anticlockwise in quarter turns. */
+export type Orientation = { front_deg: number } | { rotate_deg: 0 | 90 | 180 | 270; mirror: boolean };
+
+/** GET /map: the current map, for the review screen. */
+export interface MapInfo {
+  shape: Shape;
+  led_count: number;
+  created: string | null;
+  rounds: number | null;
+  counts: Counts;
+  orientation: Orientation;
+  led_status: string; // one letter per LED: o ok, i interpolated, f failed
+  ignored: number[]; // LEDs whose readings are ignored (filled from their neighbours)
 }
 
 export type Phase = "countdown" | "exposure" | "colours" | "flashing" | "solving" | "status";
@@ -123,7 +142,8 @@ export class Api {
 
   info = () => this.call<Info>("GET", "/info");
   leds = (cmd: Record<string, unknown>) => this.call<{ mode: string; seconds?: number }>("POST", "/leds", cmd);
-  scanStart = (settings: { shape: Shape; rounds?: number; camera?: string }) =>
+  /** `add` keeps the rounds so far and adds to them (to scan parts again). */
+  scanStart = (settings: { shape: Shape; rounds?: number; camera?: string; add?: boolean }) =>
     this.call<{ id: number }>("POST", "/scan/start", settings);
   scanStop = () => this.call<{ stopping: boolean }>("POST", "/scan/stop", {});
   scanState = () => this.call<ScanState>("GET", "/scan/state");
@@ -135,4 +155,12 @@ export class Api {
   scanNext = (finish = false) => this.call<{ round: number }>("POST", "/scan/next", { finish });
   cameraReady = (body: { message: string; settings: Record<string, unknown> }) =>
     this.call<{ ok: boolean }>("POST", "/scan/camera-ready", body);
+  play = (effect: string, params: Record<string, unknown> = {}) =>
+    this.call<unknown>("POST", "/play", { effect, params });
+  map = () => this.call<MapInfo>("GET", "/map");
+  setOrientation = (o: Orientation) => this.call<MapInfo>("POST", "/map/orientation", o);
+  /** Ignore an LED's readings (it's in the wrong place), or use them again. Answers once
+   * the map is solved again, which can take a while. */
+  interpolate = (index: number, interpolate: boolean) =>
+    this.call<MapInfo>("POST", "/map/interpolate", { index, interpolate });
 }

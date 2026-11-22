@@ -34,19 +34,18 @@ def status_frame(tree_map: TreeMap) -> np.ndarray:
 
 def verify_frame(tree_map: TreeMap, phase: float, band: float = 0.05) -> np.ndarray:
     """One frame of the verify sweep. ``phase`` 0-1 is a horizontal plane rising
-    through the tree, 1-2 a vertical one sweeping left to right (as seen from the first
-    scan angle). ``band`` is the plane's half-thickness as a fraction of the tree's
+    through the tree, 1-2 a vertical one sweeping left to right (as seen from the
+    front). ``band`` is the plane's half-thickness as a fraction of the tree's
     height. An LED that lights out of step with its neighbours is in the wrong place.
     """
-    P = tree_map.positions
+    g = tree_map.geometry
     axis, f = (1, phase) if phase < 1 else (0, phase - 1)
-    coord = P[:, axis]
-    valid = np.isfinite(coord)
+    coord, valid = g.xyz[:, axis], g.valid
     if not valid.any():
         return np.zeros((tree_map.led_count, 3), dtype=np.uint8)
     lo, hi = coord[valid].min() - 2 * band, coord[valid].max() + 2 * band
     level = lo + min(max(f, 0.0), 1.0) * (hi - lo)
-    weight = np.nan_to_num(np.clip(1 - np.abs(coord - level) / band, 0, 1))
+    weight = np.where(valid, np.clip(1 - np.abs(coord - level) / band, 0, 1), 0.0)
     colors = np.zeros((tree_map.led_count, 3), dtype=np.float32)
     for status, rgb in VERIFY_COLORS.items():
         colors[tree_map.status == status] = rgb

@@ -1,7 +1,7 @@
 // The page's state: which server, what it said, which screen.
 import { Api, normaliseServer, type Info, type Shape } from "./api";
 
-export type Screen = "connect" | "wiring" | "scan";
+export type Screen = "connect" | "wiring" | "scan" | "review";
 
 function load(key: string): string {
   try {
@@ -31,6 +31,7 @@ export const app = $state({
   info: null as Info | null,
   shape: "tree" as Shape,
   screen: "connect" as Screen,
+  addRounds: false, // the next scan adds to the rounds so far (scanning parts again)
 });
 
 /** Remember the server, and put it in the address so a reload or bookmark finds it. */
