@@ -16,18 +16,13 @@ from typing import Any
 import numpy as np
 
 from treemap.effects import palettes as pal
-from treemap.effects.base import MapEffect, Param, color_params
+from treemap.effects.base import MapEffect, Param, background_params, color_params
 from treemap.effects.palettes import XMAS
 from treemap.effects.registry import register
 from treemap.mapping.model import TreeMap
 
 TAU = 2 * np.pi
 AXES = {"up": (1, 1), "down": (1, -1), "left-right": (0, 1), "front-back": (2, -1)}
-COLORS = tuple(XMAS)
-
-
-def xmas(name: str) -> np.ndarray:
-    return np.asarray(XMAS[name], dtype=np.float32)
 
 
 def _mixed_to_palette(values: dict[str, Any], key: str) -> dict[str, Any]:
@@ -40,16 +35,6 @@ def _mixed_to_palette(values: dict[str, Any], key: str) -> dict[str, Any]:
 
 def _color_param(name: str, default: str, **kw) -> Param:
     return Param(name, "color", XMAS[default], group="colours", **kw)
-
-
-def _background_params() -> tuple[Param, Param]:
-    """The colour of the LEDs the animation isn't lighting, and how bright it is."""
-    return (
-        Param("background", "choice", "off", choices=("off", *COLORS),
-              help="colour of the LEDs the animation isn't lighting"),
-        Param("background_level", "float", 0.4, min=0.05, max=1, step=0.05,
-              label="Background brightness"),
-    )
 
 
 def _sweep(phase: float, bounce: bool) -> float:
@@ -86,15 +71,6 @@ class _Effect3D(MapEffect):
         colors = self.palette()
         return pal.pick(colors, k), pal.pick(colors, k - 1)
 
-    def background(self) -> np.ndarray:
-        name = self.p["background"]
-        return np.zeros(3, np.float32) if name == "off" else xmas(name) * self.p["background_level"]
-
-    def over_background(self, level: np.ndarray, color: np.ndarray) -> np.ndarray:
-        """``color`` at ``level`` (per LED, 0-1) over the background."""
-        level = np.asarray(level, np.float32).reshape(-1, 1)
-        return level * color + (1 - level) * self.background()
-
 
 @register
 class Plane(_Effect3D):
@@ -105,7 +81,7 @@ class Plane(_Effect3D):
         Param("direction", "choice", "up", choices=(*AXES, "around"),
               help="'around' turns a half-plane round the trunk like a lighthouse beam"),
         *color_params(XMAS["gold"], palette_help="a new colour every pass"),
-        *_background_params(),
+        *background_params(),
         Param("speed", "float", 0.4, min=0.02, max=3, step=0.01,
               help="passes (or turns) per second"),
         Param("width", "float", 0.08, min=0.01, max=0.5, step=0.01,
@@ -185,7 +161,7 @@ class Spiral(_Effect3D):
               help="turns per second round the trunk"),
         Param("width", "float", 0.4, min=0.05, max=1, step=0.01,
               help="share of each arm's period that's lit (candy: in the first colour)"),
-        *_background_params(),
+        *background_params(),
     )
 
     @classmethod
@@ -247,7 +223,7 @@ class Sphere(_Effect3D):
               help="ring: growth, tree heights per second"),
         Param("width", "float", 0.07, min=0.02, max=0.3, step=0.01,
               help="ring: shell thickness, fraction of the tree height"),
-        *_background_params(),
+        *background_params(),
     )
 
     @classmethod
@@ -350,7 +326,7 @@ class Ripple(_Effect3D):
         Param("spacing", "float", 0.3, min=0.05, max=1, step=0.01,
               help="distance between rings, fraction of the tree height"),
         Param("sharpness", "float", 6, min=1, max=30, step=0.5, help="higher: thinner rings"),
-        *_background_params(),
+        *background_params(),
     )
 
     @classmethod
@@ -405,7 +381,7 @@ class Radar(_Effect3D):
     description = "A beam turning round the trunk, leaving a fading afterglow behind it."
     params = (
         _color_param("color", "green"),
-        *_background_params(),
+        *background_params(),
         Param("speed", "float", 0.4, min=-3, max=3, step=0.01,
               help="turns per second (negative: the other way)"),
         Param("trail", "float", 0.3, min=0.02, max=1, step=0.01,
@@ -434,7 +410,7 @@ class Fireflies(_Effect3D):
               help="glow radius, fraction of the tree height"),
         Param("speed", "float", 1.0, min=0.1, max=4, step=0.05),
         Param("blink", "bool", True),
-        *_background_params(),
+        *background_params(),
     )
 
     def setup(self) -> None:

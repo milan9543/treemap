@@ -9,7 +9,15 @@ from __future__ import annotations
 import numpy as np
 
 from treemap.effects import palettes as pal
-from treemap.effects.base import WARM_WHITE, Effect, Param, color_params, hsv_to_rgb
+from treemap.effects.base import (
+    WARM_WHITE,
+    Effect,
+    Param,
+    SparkleLayer,
+    background_params,
+    color_params,
+    hsv_to_rgb,
+)
 from treemap.effects.registry import register
 
 
@@ -92,7 +100,7 @@ class Theater(Effect):
     description = "Every Nth LED lit, marching along like cinema marquee lights."
     params = (
         _color("color", (255, 255, 255)),
-        Param("background", "color", (0, 0, 0)),
+        *background_params(),
         _speed(8, 0.5, 60, "steps per second", step=0.5),
         Param("spacing", "int", 3, min=2, max=12, step=1),
     )
@@ -100,7 +108,7 @@ class Theater(Effect):
     def render(self, t):
         k = self.p["spacing"]
         lit = (np.arange(self.n) % k) == int(t * self.p["speed"]) % k
-        return np.where(lit[:, None], self.color("color"), self.color("background"))
+        return np.where(lit[:, None], self.color("color"), self.background())
 
 
 @register
@@ -148,6 +156,7 @@ class Comets(Effect):
         Param("count", "int", 3, min=1, max=30, step=1),
         _speed(60, 2, 600),
         Param("tail", "int", 25, min=1, max=200, step=1, help="tail length in LEDs"),
+        *background_params(),
     )
 
     @classmethod
@@ -163,7 +172,8 @@ class Comets(Effect):
         behind = (heads[:, None] - np.arange(n)[None, :]) % n  # (count, n) distance to head
         level = np.clip(1 - behind / self.p["tail"], 0, 1) ** 2
         colors = self.colors(np.arange(count))  # (count, 3)
-        return (level[:, :, None] * colors[:, None, :]).max(axis=0)
+        brightest = level.argmax(axis=0)  # where comets overlap, the brighter one shows
+        return self.over_background(level.max(axis=0), colors[brightest])
 
 
 @register
@@ -171,6 +181,7 @@ class Twinkle(Effect):
     name = "twinkle"
     label = "Twinkle"
     description = "Random LEDs fade in and out."
+    sparkles = False  # it is sparkles
     params = (
         *color_params(WARM_WHITE, "christmas lights",
                       palette_help="each twinkle a colour from it, at random"),
@@ -241,26 +252,23 @@ class Sparkle(Effect):
     name = "sparkle"
     label = "Sparkle"
     description = "A steady background with brief random flashes."
+    sparkles = False  # it is sparkles
     params = (
-        Param("background", "color", (60, 25, 0)),
-        _color("color", (255, 255, 255), label="Flash colour"),
+        *background_params((150, 62, 0), level=0.4),
+        *color_params((255, 255, 255), "christmas lights",
+                      palette_help="each flash a colour from it, at random"),
         Param("rate", "float", 15.0, min=0.5, max=200, step=0.5,
               help="flashes per second per 100 LEDs"),
         Param("length", "float", 0.08, min=0.02, max=1, step=0.01, help="seconds per flash"),
     )
 
     def setup(self):
-        self.until = np.zeros(self.n, dtype=np.float32)
-        self.last_t = 0.0
+        self.layer = SparkleLayer(self.n, self.rng)
 
     def render(self, t):
-        dt = max(t - self.last_t, 0.0)
-        self.last_t = t
-        k = min(self.rng.poisson(self.p["rate"] * self.n / 100 * dt), self.n)
-        if k:
-            self.until[self.rng.choice(self.n, k, replace=False)] = t + self.p["length"]
-        on = (self.until > t)[:, None]
-        return np.where(on, self.color("color"), self.color("background"))
+        colors = self.color("color")[None] if self.p["colors"] == "one" else self.palette()
+        level, rgb = self.layer.level(t, self.p["rate"], self.p["length"], colors)
+        return self.over_background(level, rgb)
 
 
 @register

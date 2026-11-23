@@ -202,14 +202,14 @@ class Engine:
             if cur is None:
                 self._exiting = True
                 return None
-            frame = np.asarray(cur.render(now - self._current_t0), dtype=np.float32)
+            frame = np.asarray(cur.frame(now - self._current_t0), dtype=np.float32)
             if self._previous is not None:
                 a = (now - self._fade_t0) / self._fade_s
                 if a >= 1:
                     self._previous = None
                 else:
                     old = np.asarray(
-                        self._previous.render(now - self._previous_t0), dtype=np.float32
+                        self._previous.frame(now - self._previous_t0), dtype=np.float32
                     )
                     frame = old * (1 - a) + frame * a
         frame = np.clip(frame * self.brightness + 0.5, 0, 255).astype(np.uint8)

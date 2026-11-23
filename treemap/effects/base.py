@@ -1,7 +1,8 @@
 """Effect and parameter base classes.
 
 An effect renders one frame at a time: ``render(t)`` returns an ``(N, 3)`` array of RGB
-values 0-255 (any numeric dtype; the engine clips, scales and converts). Effects declare
+values 0-255 (any numeric dtype; the engine clips, scales and converts). The engine
+calls ``frame(t)``, which adds the sparkles most effects can turn on. Effects declare
 their parameters as :class:`Param` objects, which gives validation, CLI parsing
 (``--param k=v``) and the controls the browser builds, all from one definition.
 Parameters can change while an effect runs, so ``render`` should read ``self.p`` each
@@ -127,6 +128,66 @@ class Param:
         return ""
 
 
+def background_params(color: tuple[int, int, int] = (0, 0, 0),
+                      level: float = 0.4) -> tuple[Param, Param]:
+    """The colour of the LEDs the animation isn't lighting (black: none), and how bright."""
+    return (
+        Param("background", "color", color, group="background",
+              help="colour of the LEDs the animation isn't lighting; black for none"),
+        Param("background_level", "float", level, min=0.05, max=1, step=0.05,
+              label="Brightness", group="background"),
+    )
+
+
+def sparkle_params() -> tuple[Param, ...]:
+    """The sparkle layer's settings, which :class:`Effect` adds to most effects."""
+    on = (("sparkle", (True,)),)
+    return (
+        Param("sparkle", "bool", False, group="sparkle", help="random twinkles over the effect"),
+        Param("sparkle_rate", "float", 8.0, min=0.5, max=100, step=0.5, label="Amount",
+              group="sparkle", help="twinkles per second per 100 LEDs", when=on),
+        Param("sparkle_length", "float", 0.3, min=0.05, max=2, step=0.05, label="Length (s)",
+              group="sparkle", help="how long each twinkle lasts", when=on),
+        Param("sparkle_palette", "palette", "snow", label="Colours", group="sparkle",
+              help="each twinkle a colour from it, at random", when=on),
+    )
+
+
+class SparkleLayer:
+    """Brief flashes on random LEDs, each fading in fast and out more slowly."""
+
+    ATTACK = 0.15  # share of a twinkle spent getting bright
+
+    def __init__(self, n: int, rng: np.random.Generator) -> None:
+        self.n, self.rng = n, rng
+        self.age = np.full(n, np.inf, dtype=np.float32)  # seconds since each LED's flash
+        self.rgb = np.zeros((n, 3), dtype=np.float32)
+        self.last_t: float | None = None
+
+    def reset(self) -> None:
+        self.age[:] = np.inf
+        self.last_t = None
+
+    def level(self, t: float, rate: float, length: float,
+              colors: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Each LED's flash level 0-1 at ``t``, and its colour: ``rate`` flashes a second
+        per 100 LEDs, ``length`` seconds each, colours picked from ``colors``."""
+        dt = 0.0 if self.last_t is None else t - self.last_t
+        dt = dt if 0 <= dt < 0.5 else 0.0  # after a pause, don't flood
+        self.last_t = t
+        self.age += dt
+        idle = np.flatnonzero(self.age > length)
+        k = min(self.rng.poisson(rate * self.n / 100 * dt), len(idle))
+        if k:
+            pick = self.rng.choice(idle, k, replace=False)
+            self.age[pick] = 0
+            self.rgb[pick] = colors[self.rng.integers(0, len(colors), k)]
+        x = self.age / length
+        level = np.where(x < self.ATTACK, x / self.ATTACK,
+                         np.clip((1 - x) / (1 - self.ATTACK), 0, 1) ** 2)
+        return level, self.rgb
+
+
 def color_params(color: tuple[int, int, int], palette: str = "christmas", *,
                  colors: str = "one", palette_help: str = "") -> tuple[Param, Param, Param]:
     """One colour, or colours from a palette: what each effect does with the palette's
@@ -162,6 +223,12 @@ class Effect:
     description: ClassVar[str] = ""
     params: ClassVar[tuple[Param, ...]] = ()
     needs_map: ClassVar[bool] = False  # it places light by the LEDs' mapped positions
+    sparkles: ClassVar[bool] = True  # it gets the sparkle layer's settings (sparkle_params)
+
+    def __init_subclass__(cls, **kw: Any) -> None:
+        super().__init_subclass__(**kw)
+        if cls.sparkles and "params" in cls.__dict__:
+            cls.params = (*cls.params, *sparkle_params())
 
     def __init__(self, ctx: EffectContext, **params: Any) -> None:
         self.ctx = ctx
@@ -169,6 +236,7 @@ class Effect:
         self.rng = ctx.rng
         self.p: dict[str, Any] = {p.name: p.default for p in self.params}
         self.set_params(params)
+        self._sparkles = SparkleLayer(self.n, self.rng) if self.sparkles else None
         self.setup()
 
     def setup(self) -> None:
@@ -177,6 +245,19 @@ class Effect:
     def render(self, t: float) -> np.ndarray:
         """The frame at ``t`` seconds since the effect started: ``(n, 3)`` values 0-255."""
         raise NotImplementedError
+
+    def frame(self, t: float) -> np.ndarray:
+        """What the LEDs show at ``t``: the effect, with sparkles over it if they're on."""
+        out = self.render(t)
+        layer = self._sparkles
+        if layer is None or not self.p.get("sparkle"):
+            if layer is not None:
+                layer.reset()  # start afresh when they're turned on again
+            return out
+        level, rgb = layer.level(t, self.p["sparkle_rate"], self.p["sparkle_length"],
+                                 self.palette("sparkle_palette"))
+        level = level[:, None]
+        return np.asarray(out, np.float32) * (1 - level) + level * rgb
 
     def set_params(self, values: dict[str, Any]) -> None:
         """Validate all values first, then apply, so a bad value changes nothing."""
@@ -234,6 +315,10 @@ class Effect:
     @classmethod
     def legacy(cls, values: dict[str, Any]) -> dict[str, Any]:
         """Old settings carried over to new ones; effects whose settings changed add theirs."""
+        if values.get("background") == "off":
+            values["background"] = (0, 0, 0)
+        if "background" in values:
+            values.setdefault("background_level", 1.0)  # strip effects had no brightness
         return values
 
     # -- helpers for subclasses -------------------------------------------------------
@@ -256,6 +341,15 @@ class Effect:
             default = next(p.default for p in self.params if p.name == name)
             colors = palettes.preset(default)
         return colors if colors is not None else palettes.preset("christmas")
+
+    def background(self) -> np.ndarray:
+        """For effects with :func:`background_params`: the colour of unlit LEDs."""
+        return self.color("background") * self.p["background_level"]
+
+    def over_background(self, level: np.ndarray, color: np.ndarray) -> np.ndarray:
+        """``color`` at ``level`` (per LED, 0-1) over the background."""
+        level = np.asarray(level, np.float32).reshape(-1, 1)
+        return level * color + (1 - level) * self.background()
 
     def colors(self, k: int | np.ndarray) -> np.ndarray:
         """For effects with :func:`color_params`: the colour of the ``k``-th thing (pass,
@@ -289,6 +383,13 @@ class MapEffect(Effect):
             return self.blank()
         frame = self.render_map(t, m)
         return np.where(m.geometry.valid[:, None], frame, 0.0)
+
+    def frame(self, t: float) -> np.ndarray:
+        out = super().frame(t)
+        m = self.tree_map()
+        if m is None:
+            return self.blank()
+        return np.where(m.geometry.valid[:, None], out, 0.0)  # no sparkles off the map
 
     def render_map(self, t: float, m: TreeMap) -> np.ndarray:
         """The frame at ``t`` for map ``m``; LEDs without a position are blacked out."""

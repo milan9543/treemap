@@ -98,7 +98,7 @@ def test_live_params_and_validation():
     engine.set_params({"color": "blue"})
     wait_for(lambda: outputs and outputs[0].last() is not None
              and (outputs[0].last() == (0, 0, 255)).all())
-    assert changes[-1]["params"] == {"color": "#0000ff"}
+    assert changes[-1]["params"]["color"] == "#0000ff"
     with pytest.raises(ParamError):
         engine.set_params({"color": "plaid"})
     engine.stop()

@@ -32,9 +32,11 @@ def ctx(n=N, seed=1):
 @pytest.mark.parametrize("name", effect_names())
 def test_every_effect_renders_valid_frames(name):
     effect = create_effect(name, ctx())
+    sparkly = create_effect(name, ctx(), {"sparkle": True}) if effect.sparkles else effect
     lit_any = False
     for k in range(60):
         frame = np.asarray(effect.render(k / 20))
+        assert np.isfinite(sparkly.frame(k / 20)).all()
         assert frame.shape == (N, 3), name
         assert np.isfinite(frame).all()
         assert frame.min() >= 0 and frame.max() <= 255.5
@@ -154,7 +156,19 @@ def test_old_settings_carry_over():
     old = {"color": "gold", "mixed": True, "background": "off", "nope": 1}
     new = get_effect("ripple").upgrade(old, N, old=True)
     assert new == {"color": "#ff8c00", "colors": "palette", "palette": "christmas",
-                   "background": "off"}
+                   "background": "#000000", "background_level": 1.0}
+
+
+def test_sparkles_over_an_effect():
+    plain = create_effect("solid", ctx(), {"color": "#400000"})
+    assert np.array_equal(plain.frame(0.5), plain.render(0.5))  # off: just the effect
+    e = create_effect("solid", ctx(), {"color": "#400000", "sparkle": True, "sparkle_rate": 50})
+    lit = np.zeros(N, bool)
+    for k in range(40):
+        frame = e.frame(k / 20)
+        lit |= frame.min(axis=1) > 0x40  # white twinkles brighten the dark red
+    assert 10 < lit.sum() < N
+    assert "sparkle" not in {p.name for p in get_effect("twinkle").params}
 
 
 def test_hsv_to_rgb_primaries():
