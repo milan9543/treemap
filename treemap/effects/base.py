@@ -17,16 +17,14 @@ from typing import Any, ClassVar
 
 import numpy as np
 
+from treemap.effects import palettes
+from treemap.effects.palettes import XMAS
 from treemap.mapping.model import TreeMap
 from treemap.patterns import parse_color
 
-KINDS = ("color", "float", "int", "choice", "bool")
+KINDS = ("color", "float", "int", "choice", "bool", "palette")
 
 WARM_WHITE = (255, 150, 60)
-CHRISTMAS = np.array(  # palette: red, green, blue, gold, pink, white
-    [(255, 0, 0), (0, 200, 0), (0, 60, 255), (255, 160, 0), (255, 40, 120), (255, 255, 255)],
-    dtype=np.float32,
-)
 
 
 class ParamError(ValueError):
@@ -45,6 +43,9 @@ class Param:
     step: float | None = None
     choices: tuple[str, ...] = ()
     max_is_last_led: bool = False  # int params naming an LED: max becomes led_count - 1
+    group: str = ""  # params sharing a group are shown together: colours, background, sparkle
+    # shown only while each named param has one of the listed values
+    when: tuple[tuple[str, tuple[Any, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         if self.kind not in KINDS:
@@ -62,7 +63,12 @@ class Param:
                     if all(0 <= c <= 255 for c in rgb):
                         return rgb
                     raise ValueError
-                return parse_color(str(value))
+                name = str(value).strip().lower()
+                return XMAS[name] if name in XMAS else parse_color(name)
+            if self.kind == "palette":
+                if not palettes.is_palette_id(value):
+                    raise ValueError
+                return value
             if self.kind == "bool":
                 if isinstance(value, bool):
                     return value
@@ -107,6 +113,8 @@ class Param:
             "max": hi,
             "step": self.step,
             "choices": list(self.choices),
+            "group": self.group,
+            "when": [{"param": name, "values": list(values)} for name, values in self.when],
         }
 
     def _hint(self) -> str:
@@ -114,7 +122,23 @@ class Param:
             return f" (one of {', '.join(self.choices)})"
         if self.kind == "color":
             return " (a name, #rrggbb or r,g,b)"
+        if self.kind == "palette":
+            return " (a palette's id)"
         return ""
+
+
+def color_params(color: tuple[int, int, int], palette: str = "christmas", *,
+                 colors: str = "one", palette_help: str = "") -> tuple[Param, Param, Param]:
+    """One colour, or colours from a palette: what each effect does with the palette's
+    colours is up to it (``palette_help`` says)."""
+    return (
+        Param("colors", "choice", colors, choices=("one", "palette"), label="Colours",
+              group="colours", help="one colour, or the colours of a palette"),
+        Param("color", "color", color, label="Colour", group="colours",
+              when=(("colors", ("one",)),)),
+        Param("palette", "palette", palette, group="colours", help=palette_help,
+              when=(("colors", ("palette",)),)),
+    )
 
 
 @dataclass
@@ -127,6 +151,8 @@ class EffectContext:
     # Returns the current tree map (or None); usually a treemap.mapping.model.MapFile,
     # which reloads the map when a scan changes it.
     tree_map: Callable[[], TreeMap | None] | None = None
+    # A custom palette's colours by its id (None if there's no such palette).
+    palettes: Callable[[str], list[tuple[int, int, int]] | None] | None = None
 
 
 class Effect:
@@ -190,6 +216,26 @@ class Effect:
             out[key] = by_name[key].to_json(by_name[key].parse(value, n))
         return out
 
+    @classmethod
+    def upgrade(cls, values: dict[str, Any], n: int, old: bool = False) -> dict[str, Any]:
+        """Saved settings (a favourite's) as this version takes them: ones it no longer
+        has or can't read are dropped, so they play with their defaults. ``old``: saved
+        before the colour settings changed, so carry the renamed ones over (:meth:`legacy`)."""
+        by_name = {p.name: p for p in cls.params}
+        out = {}
+        for key, value in (cls.legacy(dict(values)) if old else values).items():
+            if key in by_name:
+                try:
+                    out[key] = by_name[key].to_json(by_name[key].parse(value, n))
+                except ParamError:
+                    pass
+        return out
+
+    @classmethod
+    def legacy(cls, values: dict[str, Any]) -> dict[str, Any]:
+        """Old settings carried over to new ones; effects whose settings changed add theirs."""
+        return values
+
     # -- helpers for subclasses -------------------------------------------------------
 
     def blank(self) -> np.ndarray:
@@ -197,6 +243,26 @@ class Effect:
 
     def color(self, name: str) -> np.ndarray:
         return np.asarray(self.p[name], dtype=np.float32)
+
+    def palette(self, name: str = "palette") -> np.ndarray:
+        """The colours of the palette a palette parameter names, ``(k, 3)``; a palette
+        that's gone (deleted) gives the parameter's default."""
+        pid = self.p[name]
+        colors = palettes.preset(pid)
+        if colors is None and self.ctx.palettes is not None:
+            custom = self.ctx.palettes(pid)
+            colors = palettes.stops(custom) if custom else None
+        if colors is None:
+            default = next(p.default for p in self.params if p.name == name)
+            colors = palettes.preset(default)
+        return colors if colors is not None else palettes.preset("christmas")
+
+    def colors(self, k: int | np.ndarray) -> np.ndarray:
+        """For effects with :func:`color_params`: the colour of the ``k``-th thing (pass,
+        ring, arm...), ``k.shape + (3,)``: the one colour, or round the palette."""
+        if self.p["colors"] == "one":
+            return np.broadcast_to(self.color("color"), np.shape(k) + (3,)).astype(np.float32)
+        return palettes.pick(self.palette(), k)
 
 
 class MapEffect(Effect):

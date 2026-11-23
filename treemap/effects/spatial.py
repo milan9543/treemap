@@ -4,92 +4,42 @@ They work in the map's normalised frame (y 0-1 up the tree, x and z centred on t
 trunk at the same scale; see :class:`treemap.mapping.model.Geometry`), so sizes and
 widths are fractions of the tree's height.
 
-They all keep to Christmas colours: every colour setting picks one of :data:`XMAS`, and
-effects that used to run through the rainbow cycle through Christmas colours instead.
+Colours come from the colour settings: one colour, or a palette
+(:mod:`treemap.effects.palettes`), which each effect uses in its own way.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
-from treemap.effects.base import MapEffect, Param
+from treemap.effects import palettes as pal
+from treemap.effects.base import MapEffect, Param, color_params
+from treemap.effects.palettes import XMAS
 from treemap.effects.registry import register
 from treemap.mapping.model import TreeMap
 
 TAU = 2 * np.pi
 AXES = {"up": (1, 1), "down": (1, -1), "left-right": (0, 1), "front-back": (2, -1)}
-
-# The Christmas colours every 3D effect draws from.
-XMAS = {
-    "red": (255, 0, 0),
-    "green": (0, 190, 20),
-    "gold": (255, 140, 0),
-    "warm white": (255, 150, 60),
-    "white": (255, 255, 255),
-}
 COLORS = tuple(XMAS)
-CYCLE = np.array([XMAS[k] for k in ("red", "green", "gold", "white")], dtype=np.float32)
-
-# Looping palettes for colour that flows (bands, every new pass or ring).
-PALETTES = {
-    "christmas": ["red", "gold", "green", "white"],
-    "candy cane": ["red", "white"],
-    "red & green": ["red", "green"],
-    "green & gold": ["green", "gold"],
-    "gold": ["gold", "warm white"],
-}
-
-# Gradients, dark to bright, for effects that map a 0-1 value to a colour.
-GRADIENTS = {
-    "christmas": [(60, 0, 0), (255, 0, 0), (255, 140, 0), (0, 190, 20), (0, 50, 5)],
-    "candlelight": [(0, 0, 0), (120, 0, 0), (255, 40, 0), (255, 140, 0), (255, 200, 120)],
-    "fir": [(0, 10, 0), (0, 80, 10), (0, 190, 20), (220, 150, 0), (255, 190, 90)],
-    "candy cane": [(60, 0, 0), (255, 0, 0), (255, 80, 80), (255, 255, 255)],
-}
 
 
 def xmas(name: str) -> np.ndarray:
     return np.asarray(XMAS[name], dtype=np.float32)
 
 
-def cycle(k: np.ndarray | float | int) -> np.ndarray:
-    """The ``k``-th Christmas colour, going round red, green, gold, white."""
-    return CYCLE[np.asarray(k, dtype=np.int64) % len(CYCLE)]
-
-
-def palette(name: str, s: np.ndarray) -> np.ndarray:
-    """Colours 0-255 round a looping palette for ``s`` (one loop per 1): ``s.shape + (3,)``."""
-    stops = np.asarray([XMAS[k] for k in PALETTES[name]], dtype=np.float32)
-    stops = np.concatenate([stops, stops[:1]])
-    x = np.linspace(0, 1, len(stops))
-    s = np.mod(s, 1.0)
-    return np.stack([np.interp(s, x, stops[:, c]) for c in range(3)], axis=-1).astype(np.float32)
-
-
-def palette_color(name: str, k: int) -> np.ndarray:
-    """The ``k``-th colour of a palette, going round it."""
-    names = PALETTES[name]
-    return xmas(names[k % len(names)])
-
-
-def gradient(name: str, s: np.ndarray) -> np.ndarray:
-    """Colours 0-255 along a named gradient for values ``s`` 0-1 (clipped):
-    ``s.shape + (3,)``."""
-    return gradient_stops(GRADIENTS[name], s)
-
-
-def gradient_stops(stops: list[tuple[int, int, int]], s: np.ndarray) -> np.ndarray:
-    """Colours 0-255 along the given gradient stops for values ``s`` 0-1 (clipped)."""
-    stops_a = np.asarray(stops, dtype=np.float32)
-    x = np.linspace(0, 1, len(stops_a))
-    s = np.clip(s, 0, 1)
-    return np.stack([np.interp(s, x, stops_a[:, c]) for c in range(3)], axis=-1).astype(np.float32)
+def _mixed_to_palette(values: dict[str, Any], key: str) -> dict[str, Any]:
+    """An old 'each one its own Christmas colour' switch, as the colour settings."""
+    if values.pop(key, False) is True:
+        values.setdefault("colors", "palette")
+        values.setdefault("palette", "christmas")
+    return values
 
 
 def _color_param(name: str, default: str, **kw) -> Param:
-    return Param(name, "choice", default, choices=COLORS, **kw)
+    return Param(name, "color", XMAS[default], group="colours", **kw)
 
 
 def _background_params() -> tuple[Param, Param]:
@@ -111,7 +61,7 @@ def _sweep(phase: float, bounce: bool) -> float:
 
 def _fill_params(wave: float, wave_help: str) -> tuple[Param, ...]:
     return (
-        Param("palette", "choice", "christmas", choices=tuple(PALETTES),
+        Param("palette", "palette", "christmas", group="colours",
               help="the colours the fills go through, in turn"),
         Param("speed", "float", 0.25, min=0.03, max=2, step=0.01, label="Animation speed",
               help="fills per second: 0.25 takes 4 s to fill the tree"),
@@ -133,7 +83,8 @@ class _Effect3D(MapEffect):
 
     def fill_colors(self, k: int) -> tuple[np.ndarray, np.ndarray]:
         """The colour fill ``k`` brings, and the one it covers."""
-        return palette_color(self.p["palette"], k), palette_color(self.p["palette"], k - 1)
+        colors = self.palette()
+        return pal.pick(colors, k), pal.pick(colors, k - 1)
 
     def background(self) -> np.ndarray:
         name = self.p["background"]
@@ -153,15 +104,18 @@ class Plane(_Effect3D):
     params = (
         Param("direction", "choice", "up", choices=(*AXES, "around"),
               help="'around' turns a half-plane round the trunk like a lighthouse beam"),
-        _color_param("color", "gold"),
+        *color_params(XMAS["gold"], palette_help="a new colour every pass"),
         *_background_params(),
         Param("speed", "float", 0.4, min=0.02, max=3, step=0.01,
               help="passes (or turns) per second"),
         Param("width", "float", 0.08, min=0.01, max=0.5, step=0.01,
               help="half-thickness, fraction of the tree height"),
         Param("bounce", "bool", False, help="go back and forth instead of starting over"),
-        Param("cycle", "bool", False, help="a new Christmas colour every pass"),
     )
+
+    @classmethod
+    def legacy(cls, values):
+        return _mixed_to_palette(super().legacy(values), "cycle")
 
     def render_map(self, t: float, m: TreeMap) -> np.ndarray:
         g, w = m.geometry, self.p["width"]
@@ -178,8 +132,7 @@ class Plane(_Effect3D):
             lo, hi = g.lo[axis] - 2 * w, g.hi[axis] + 2 * w  # starts and ends off the tree
             level = lo + (f if sign > 0 else 1 - f) * (hi - lo)
             dist = np.abs(g.xyz[:, axis] - level)
-        color = cycle(np.floor(phase)) if self.p["cycle"] else xmas(self.p["color"])
-        return self.over_background(np.clip(1 - dist / w, 0, 1), color)
+        return self.over_background(np.clip(1 - dist / w, 0, 1), self.colors(int(np.floor(phase))))
 
 
 @register
@@ -190,7 +143,7 @@ class Rainbow3D(_Effect3D):
     params = (
         Param("direction", "choice", "up", choices=("up", "around", "out", "tilted"),
               help="'tilted' slants the bands and turns them slowly round the trunk"),
-        Param("palette", "choice", "christmas", choices=tuple(PALETTES)),
+        Param("palette", "palette", "christmas", group="colours"),
         Param("speed", "float", 0.2, min=-2, max=2, step=0.01,
               help="times round the palette per second"),
         Param("repeats", "float", 1.0, min=0.1, max=10, step=0.1,
@@ -210,7 +163,7 @@ class Rainbow3D(_Effect3D):
             a, tilt = TAU * t / 20, np.radians(40)
             side = g.xyz[:, 0] * np.sin(a) + g.xyz[:, 2] * np.cos(a)
             s = g.h * np.cos(tilt) + side * np.sin(tilt)
-        return palette(self.p["palette"], s * repeats - t * self.p["speed"])
+        return pal.loop(self.palette(), s * repeats - t * self.p["speed"])
 
 
 @register
@@ -221,8 +174,10 @@ class Spiral(_Effect3D):
     params = (
         Param("style", "choice", "helix", choices=("helix", "candy"),
               help="helix: lines on black; candy: stripes of both colours"),
-        _color_param("color", "red"),
-        _color_param("color2", "white", label="Second colour", help="candy only"),
+        *color_params(XMAS["red"], "candy cane",
+                      palette_help="helix: each arm the next colour; candy: each stripe"),
+        _color_param("color2", "white", label="Second colour",
+                     when=(("style", ("candy",)), ("colors", ("one",)))),
         Param("arms", "int", 2, min=1, max=8, step=1, help="helix lines or stripe pairs"),
         Param("turns", "float", 2.0, min=-8, max=8, step=0.1,
               help="how often each arm winds round the trunk, bottom to top"),
@@ -230,20 +185,25 @@ class Spiral(_Effect3D):
               help="turns per second round the trunk"),
         Param("width", "float", 0.4, min=0.05, max=1, step=0.01,
               help="share of each arm's period that's lit (candy: in the first colour)"),
-        Param("mixed", "bool", False, help="helix: each arm its own Christmas colour"),
         *_background_params(),
     )
+
+    @classmethod
+    def legacy(cls, values):
+        return _mixed_to_palette(super().legacy(values), "mixed")
 
     def render_map(self, t: float, m: TreeMap) -> np.ndarray:
         g, arms, width = m.geometry, self.p["arms"], self.p["width"]
         phase = arms * (g.theta / TAU + self.p["turns"] * g.h - self.p["speed"] * t)
         if self.p["style"] == "candy":
             first = (phase % 1 < width)[:, None]
-            return np.where(first, xmas(self.p["color"]), xmas(self.p["color2"]))
+            if self.p["colors"] == "one":
+                return np.where(first, self.color("color"), self.color("color2"))
+            k = 2 * (np.floor(phase).astype(np.int64) % arms)  # stripe pairs round the trunk
+            return np.where(first, pal.pick(self.palette(), k), pal.pick(self.palette(), k + 1))
         nearest = np.round(phase)  # the centre line of the closest arm
         level = np.clip(1 - np.abs(phase - nearest) / (width / 2), 0, 1)
-        color = cycle(nearest % arms) if self.p["mixed"] else xmas(self.p["color"])
-        return self.over_background(level, color)
+        return self.over_background(level, self.colors(nearest.astype(np.int64) % arms))
 
 
 @dataclass
@@ -271,8 +231,8 @@ class Sphere(_Effect3D):
     params = (
         Param("style", "choice", "explosion", choices=("explosion", "ring"),
               help="explosion: sparks flying out; ring: a shell of light growing and fading"),
-        Param("palette", "choice", "christmas", choices=("christmas", "one colour")),
-        _color_param("color", "gold", help="used by 'one colour'"),
+        *color_params(XMAS["gold"], colors="palette",
+                      palette_help="each burst a colour from it, at random"),
         Param("rate", "float", 0.7, min=0.1, max=10, step=0.1, help="bursts per second"),
         Param("size", "float", 0.3, min=0.05, max=1.5, step=0.05,
               help="how far the sparks fly (ring: largest radius), fraction of the tree height"),
@@ -290,15 +250,25 @@ class Sphere(_Effect3D):
         *_background_params(),
     )
 
+    @classmethod
+    def legacy(cls, values):
+        values = super().legacy(values)
+        if values.get("palette") == "one colour":
+            values["colors"] = "one"
+            del values["palette"]
+        elif values.get("palette") == "christmas":
+            values.setdefault("colors", "palette")
+        return values
+
     def setup(self) -> None:
         super().setup()
         self.bursts: list[_Burst] = []
         self.next_burst = 0.0
 
     def _color(self) -> np.ndarray:
-        if self.p["palette"] == "christmas":
-            return cycle(self.rng.integers(len(CYCLE)))
-        return xmas(self.p["color"])
+        if self.p["colors"] == "one":
+            return self.color("color")
+        return pal.random(self.palette(), self.rng, 1)[0]
 
     def _lifetime(self) -> float:
         p = self.p
@@ -374,8 +344,7 @@ class Ripple(_Effect3D):
     description = "Rings of light spreading through the tree from the top, middle or bottom."
     params = (
         Param("origin", "choice", "top", choices=("top", "middle", "bottom")),
-        _color_param("color", "gold"),
-        Param("mixed", "bool", False, help="every ring its own Christmas colour"),
+        *color_params(XMAS["gold"], palette_help="each ring the next colour"),
         Param("speed", "float", 0.8, min=-3, max=3, step=0.05,
               help="rings per second (negative: they run inwards)"),
         Param("spacing", "float", 0.3, min=0.05, max=1, step=0.01,
@@ -384,14 +353,17 @@ class Ripple(_Effect3D):
         *_background_params(),
     )
 
+    @classmethod
+    def legacy(cls, values):
+        return _mixed_to_palette(super().legacy(values), "mixed")
+
     def render_map(self, t: float, m: TreeMap) -> np.ndarray:
         g = m.geometry
         y = {"top": g.hi[1], "middle": (g.lo[1] + g.hi[1]) / 2, "bottom": g.lo[1]}[self.p["origin"]]
         dist = np.linalg.norm(g.xyz - np.array([0, y, 0], np.float32), axis=1)
         phase = dist / self.p["spacing"] - t * self.p["speed"]
         level = ((1 + np.cos(TAU * phase)) / 2) ** self.p["sharpness"]
-        color = cycle(np.round(phase)) if self.p["mixed"] else xmas(self.p["color"])
-        return self.over_background(level, color)
+        return self.over_background(level, self.colors(np.round(phase).astype(np.int64)))
 
 
 @register
@@ -400,11 +372,20 @@ class Plasma(_Effect3D):
     label = "Plasma"
     description = "Slowly flowing blobs of colour drifting through the tree in 3D."
     params = (
-        Param("palette", "choice", "christmas", choices=tuple(GRADIENTS)),
+        Param("palette", "palette", "christmas dusk", group="colours",
+              help="the blobs go from its first colour to its last"),
         Param("speed", "float", 1.0, min=0.05, max=5, step=0.05),
         Param("scale", "float", 0.5, min=0.1, max=2, step=0.05,
               help="blob size, fraction of the tree height"),
     )
+    OLD_GRADIENTS = {"christmas": "christmas dusk", "candy cane": "candy glow"}
+
+    @classmethod
+    def legacy(cls, values):
+        values = super().legacy(values)
+        if values.get("palette") in cls.OLD_GRADIENTS:
+            values["palette"] = cls.OLD_GRADIENTS[values["palette"]]
+        return values
 
     def render_map(self, t: float, m: TreeMap) -> np.ndarray:
         g, k, sp = m.geometry, 1 / self.p["scale"], self.p["speed"] * t
@@ -414,7 +395,7 @@ class Plasma(_Effect3D):
              + np.sin(TAU * ((x + z) * k * 0.6 + sp * 0.13))
              + np.sin(TAU * (g.r * k * 1.3 - y * k * 0.4 - sp * 0.09)))
         s = (v / 4 + 1) / 2  # 0-1
-        return gradient(self.p["palette"], s * 1.15 - 0.1)  # some LEDs reach black and white
+        return pal.ramp(self.palette(), s * 1.15 - 0.1)  # some LEDs reach black and white
 
 
 @register
@@ -438,7 +419,7 @@ class Radar(_Effect3D):
         if speed < 0:
             behind = 1.0 - behind
         level = np.exp(-behind / (self.p["trail"] / 3))
-        return self.over_background(level, xmas(self.p["color"]))
+        return self.over_background(level, self.color("color"))
 
 
 @register
@@ -447,7 +428,7 @@ class Fireflies(_Effect3D):
     label = "Fireflies"
     description = "Little glowing lights drifting about inside the tree, blinking."
     params = (
-        _color_param("color", "gold"),
+        *color_params(XMAS["gold"], palette_help="each firefly the next colour"),
         Param("count", "int", 8, min=1, max=40, step=1),
         Param("size", "float", 0.06, min=0.02, max=0.25, step=0.01,
               help="glow radius, fraction of the tree height"),
@@ -481,7 +462,9 @@ class Fireflies(_Effect3D):
         if self.p["blink"]:
             pulse = np.sin(TAU * self.blink_rate[:n] * t + self.phase[2, :n])
             glow = glow * np.clip(0.3 + pulse, 0, 1)[:, None]  # on ~60% of the time
-        return self.over_background(np.clip(glow.sum(axis=0), 0, 1), xmas(self.p["color"]))
+        total = glow.sum(axis=0)
+        mix = glow.T @ self.colors(np.arange(n)) / np.maximum(total, 1e-6)[:, None]
+        return self.over_background(np.clip(total, 0, 1), mix)
 
 
 @register
@@ -531,7 +514,8 @@ class FillOut(_Effect3D):
         return inside * new + (1 - inside) * old
 
 
-FIRE = [(0, 0, 0), (110, 0, 0), (230, 30, 0), (255, 110, 0), (255, 180, 30), (255, 230, 150)]
+FIRE = pal.stops([(0, 0, 0), (110, 0, 0), (230, 30, 0), (255, 110, 0), (255, 180, 30),
+                  (255, 230, 150)])
 TONGUES = 7  # flame tongues round the trunk
 PUFFS = 10  # blobs of flame breaking off the tips
 SPARKS = 24
@@ -611,7 +595,7 @@ class Fire(_Effect3D):
             d2 = ((h[:, None] - sh[None]) / 0.025) ** 2 + (
                 np.angle(np.exp(1j * (th[:, None] - st[None]))) / 0.12) ** 2
             heat = np.maximum(heat, (0.85 * (1 - rise[None]) * np.exp(-d2)).max(axis=1))
-        return gradient_stops(FIRE, heat)
+        return pal.ramp(FIRE, heat)
 
 
 @register
@@ -634,4 +618,4 @@ class Blocks(_Effect3D):
         xr, zr = x * np.cos(a) - z * np.sin(a), x * np.sin(a) + z * np.cos(a)
         cells = np.floor(xr / size) + np.floor(y / size) + np.floor(zr / size)
         first = (cells.astype(int) % 2 == 0)[:, None]
-        return np.where(first, xmas(self.p["color"]), xmas(self.p["color2"]))
+        return np.where(first, self.color("color"), self.color("color2"))

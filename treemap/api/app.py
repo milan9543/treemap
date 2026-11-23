@@ -147,6 +147,10 @@ class Api:
             ("POST", "/playlists", self.add_playlist),
             ("PUT", "/playlists/{id}", self.put_playlist),
             ("DELETE", "/playlists/{id}", self.delete_playlist),
+            ("GET", "/palettes", self.palettes),
+            ("POST", "/palettes", self.add_palette),
+            ("PUT", "/palettes/{id}", self.put_palette),
+            ("DELETE", "/palettes/{id}", self.delete_palette),
         ):
             self.router.add(method, PREFIX + path, handler)
         for method, path, name in DeviceApi.ROUTES:
@@ -356,6 +360,19 @@ class Api:
 
     def delete_playlist(self, req: Request) -> dict[str, Any]:
         self._library(lambda: self.library.remove_playlist(req.args["id"]))
+        return {"deleted": req.args["id"]}
+
+    def palettes(self, req: Request) -> dict[str, Any]:
+        return {"palettes": self.library.palettes()}
+
+    def add_palette(self, req: Request) -> tuple[int, dict[str, Any]]:
+        return 201, self._library(lambda: self.library.add_palette(req.json()))
+
+    def put_palette(self, req: Request) -> dict[str, Any]:
+        return self._library(lambda: self.library.put_palette(req.args["id"], req.json()))
+
+    def delete_palette(self, req: Request) -> dict[str, Any]:
+        self._library(lambda: self.library.remove_palette(req.args["id"]))
         return {"deleted": req.args["id"]}
 
     # -- lifecycle ----------------------------------------------------------------------

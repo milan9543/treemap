@@ -1,6 +1,7 @@
 <script lang="ts">
   // An effect's controls, built from how GET /effects describes its parameters.
   import type { EffectInfo, EffectParam, Params } from "./api";
+  import { loadPalettes, palettes } from "./palettes.svelte";
 
   let { fx, values, onchange }: {
     fx: EffectInfo;
@@ -11,10 +12,14 @@
   const value = (p: EffectParam) => values[p.name] ?? p.default;
   const decimals = (p: EffectParam) => (p.kind === "int" ? 0 : p.step && p.step < 0.1 ? 2 : 1);
   const fmt = (p: EffectParam) => Number(value(p)).toFixed(decimals(p));
+  const shown = (p: EffectParam) =>
+    p.when.every((w) => w.values.includes(values[w.param] ?? fx.params.find((q) => q.name === w.param)?.default));
+
+  $effect(() => { if (fx.params.some((p) => p.kind === "palette")) loadPalettes(); });
 </script>
 
 <div class="params">
-  {#each fx.params as p (p.name)}
+  {#each fx.params.filter(shown) as p (p.name)}
     <label class="ctl" title={p.help}>
       <span>{p.label}</span>
       {#if p.kind === "color"}
@@ -26,6 +31,11 @@
       {:else if p.kind === "choice"}
         <select value={String(value(p))} onchange={(e) => onchange(p.name, e.currentTarget.value)}>
           {#each p.choices as c (c)}<option value={c}>{c}</option>{/each}
+        </select>
+        <output></output>
+      {:else if p.kind === "palette"}
+        <select value={String(value(p))} onchange={(e) => onchange(p.name, e.currentTarget.value)}>
+          {#each palettes.list as pl (pl.id)}<option value={pl.id}>{pl.name}</option>{/each}
         </select>
         <output></output>
       {:else}

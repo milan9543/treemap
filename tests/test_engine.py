@@ -158,4 +158,4 @@ def test_restart_after_stop():
         wait_for(lambda: outputs[-1].last() is not None and outputs[-1].last().any())
         engine.stop()
     assert len(outputs) == 2
-    assert np.array_equal(outputs[1].frames[0][0], [0, 255, 0])
+    assert np.array_equal(outputs[1].frames[0][0], [0, 190, 20])  # the Christmas green

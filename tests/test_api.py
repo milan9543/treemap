@@ -180,6 +180,38 @@ def test_effects_favourites_and_playlists(serve):
     assert call(base + "/stop", {})[2]["effect"] is None and not api.output.frame.any()
 
 
+def test_palettes(serve):
+    api, base = serve(engine={"crossfade": 0})
+    root = base.rsplit("/devices/", 1)[0]
+    presets = call(root + "/palettes")[2]["palettes"]
+    assert {"christmas", "candy cane", "snow"} <= {p["id"] for p in presets if p["preset"]}
+
+    status, _, ice = call(root + "/palettes", {"name": "Ice", "colors": ["#ffffff", "0,0,255"]})
+    assert status == 201 and ice["colors"] == ["#ffffff", "#0000ff"] and not ice["preset"]
+    assert call(root + "/palettes", {"name": "x", "colors": []})[0] == 400
+    fav = call(root + "/favourites", {"name": "Icy bands", "effect": "rainbow3d",
+                                      "params": {"palette": ice["id"]}})[2]
+    status, _, ice = call(root + f"/palettes/{ice['id']}", {"name": "Ice", "colors": ["#00ff00"]},
+                          "PUT")
+    assert status == 200 and api.library.palette_colors(ice["id"]) == [(0, 255, 0)]
+
+    # deleting it puts the favourite back on the effect's default palette
+    assert call(root + f"/palettes/{ice['id']}", method="DELETE")[0] == 200
+    assert call(root + "/favourites")[2]["favourites"][0]["params"]["palette"] == "christmas"
+    assert call(root + f"/palettes/{fav['id']}", method="DELETE")[0] == 404
+
+
+def test_old_favourites_still_play(serve):
+    api, base = serve(engine={"crossfade": 0})
+    api.library.path.write_text(json.dumps({"version": 1, "favourites": [
+        {"id": "a", "name": "Colourful", "effect": "comets",
+         "params": {"color": "gold", "rainbow": True, "count": 4}}]}))
+    status, _, playing = call(base + "/play", {"favourite": "a"})
+    assert status == 200 and playing["effect"] == "comets", playing
+    assert playing["params"]["colors"] == "palette" and playing["params"]["palette"] == "rainbow"
+    assert playing["params"]["count"] == 4 and "rainbow" not in playing["params"]
+
+
 def phone(base: str, api: Api, tree: SimTree, stop: threading.Event,
           clock: dict | None = None) -> None:
     """Plays the page: films the LEDs walking round the tree, uploads every 250 ms.

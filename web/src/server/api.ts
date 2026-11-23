@@ -65,7 +65,7 @@ export interface MapInfo {
 
 export interface EffectParam {
   name: string;
-  kind: "color" | "float" | "int" | "choice" | "bool";
+  kind: "color" | "float" | "int" | "choice" | "bool" | "palette";
   default: unknown;
   label: string;
   help: string;
@@ -73,6 +73,8 @@ export interface EffectParam {
   max: number | null;
   step: number | null;
   choices: string[];
+  group: string; // shared settings shown together: colours, background, sparkle
+  when: { param: string; values: unknown[] }[]; // shown only while each holds
 }
 
 export interface EffectInfo {
@@ -97,6 +99,8 @@ export interface Favourite { id: string; name: string; effect: string; params: P
 export interface PlaylistItem { favourite: string; duration_s: number }
 export interface Playlist { id: string; name: string; items: PlaylistItem[]; crossfade_s: number; shuffle: boolean }
 export type PlaylistFields = Omit<Playlist, "id">;
+export interface Palette { id: string; name: string; colors: string[]; preset: boolean }
+export type PaletteFields = Pick<Palette, "name" | "colors">;
 
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
@@ -142,6 +146,10 @@ export const api = {
   addPlaylist: (p: PlaylistFields) => call<Playlist>("POST", "/playlists", p),
   putPlaylist: (id: string, p: PlaylistFields) => call<Playlist>("PUT", `/playlists/${enc(id)}`, p),
   deletePlaylist: (id: string) => call<unknown>("DELETE", `/playlists/${enc(id)}`),
+  palettes: () => call<{ palettes: Palette[] }>("GET", "/palettes"),
+  addPalette: (p: PaletteFields) => call<Palette>("POST", "/palettes", p),
+  putPalette: (id: string, p: PaletteFields) => call<Palette>("PUT", `/palettes/${enc(id)}`, p),
+  deletePalette: (id: string) => call<unknown>("DELETE", `/palettes/${enc(id)}`),
 };
 
 /** One device's endpoints. */

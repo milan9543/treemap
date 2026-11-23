@@ -152,7 +152,8 @@ class DeviceApi:
         shared = lambda: SharedOutput(output)  # noqa: E731
         fps = cfg.engine.fps
         self.engine = Engine(
-            shared, EffectContext(n=self.n, fps=fps, tree_map=MapFile(cfg.map_path)),
+            shared, EffectContext(n=self.n, fps=fps, tree_map=MapFile(cfg.map_path),
+                                  palettes=library.palette_colors),
             fps=fps, brightness=cfg.engine.brightness, crossfade_s=cfg.engine.crossfade,
             gamma=cfg.gamma,
         )

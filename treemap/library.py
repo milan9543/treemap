@@ -15,6 +15,17 @@ and starts again at the end (in a new order each time when shuffled)::
 
 Deleting a favourite takes it out of every playlist too.
 
+A **palette** is a list of colours that effects can use, kept by id so that editing it
+changes every favourite that uses it::
+
+    {"id": "my-0c1d2e3f", "name": "Ice", "colors": ["#ffffff", "#78b4ff"]}
+
+Deleting a palette puts the favourites that used it back on their effect's default.
+The built-in palettes (:data:`treemap.effects.palettes.PRESETS`) can't be changed.
+
+Favourites saved before version 2 had older colour settings; reading them carries those
+over (:meth:`treemap.effects.Effect.upgrade`), and the next write saves them that way.
+
 The file is read on every call and written whole (to a temporary file, then renamed), so
 a half-written file is never read.
 """
@@ -31,11 +42,16 @@ from pathlib import Path
 from typing import Any
 
 from treemap.effects import ParamError, get_effect
+from treemap.effects import palettes as pal
+from treemap.patterns import parse_color
+
+VERSION = 2
 
 MAX_NAME = 80
 MAX_FAVOURITES = 500
 MAX_PLAYLISTS = 100
 MAX_ITEMS = 200
+MAX_PALETTES = 100
 DURATION_S = (5.0, 24 * 3600.0)  # how long one favourite plays in a playlist
 CROSSFADE_S = (0.0, 30.0)
 ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -50,6 +66,7 @@ class Library:
         self.path = path
         self._n = led_count if callable(led_count) else (lambda: led_count)
         self._lock = threading.Lock()
+        self._palette_cache: tuple[Any, dict[str, list]] = (None, {})
 
     # -- favourites -------------------------------------------------------------------
 
@@ -101,6 +118,79 @@ class Library:
 
     def playlists(self) -> list[dict[str, Any]]:
         return self._read()["playlists"]
+
+    # -- palettes ---------------------------------------------------------------------
+
+    def palettes(self) -> list[dict[str, Any]]:
+        """The built-in palettes (``"preset": true``), then the custom ones."""
+        return pal.describe_presets() + [{**p, "preset": False} for p in self._read()["palettes"]]
+
+    def palette_colors(self, pal_id: str) -> list[tuple[int, int, int]] | None:
+        """A custom palette's colours, or None. Effects call this every frame, so the
+        file is only read again when it changes."""
+        try:
+            st = self.path.stat()
+            key = (st.st_mtime_ns, st.st_size)
+        except FileNotFoundError:
+            key = None
+        if key != self._palette_cache[0]:
+            found = {p["id"]: [parse_color(c) for c in p["colors"]]
+                     for p in self._read()["palettes"]}
+            self._palette_cache = (key, found)
+        return self._palette_cache[1].get(pal_id)
+
+    def add_palette(self, body: dict[str, Any]) -> dict[str, Any]:
+        """``{"name", "colors"}``."""
+        with self._lock:
+            data = self._read()
+            if len(data["palettes"]) >= MAX_PALETTES:
+                raise LibraryError(f"there are already {MAX_PALETTES} palettes")
+            taken = {p["id"] for p in data["palettes"]}
+            while (new := f"my-{secrets.token_hex(4)}") in taken:
+                pass
+            palette = {"id": new, **self._palette_fields(body)}
+            data["palettes"].append(palette)
+            self._write(data)
+        return {**palette, "preset": False}
+
+    def put_palette(self, pal_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Replace its name and colours. Raises KeyError."""
+        with self._lock:
+            data = self._read()
+            palette = _find(data["palettes"], pal_id, "palette")
+            palette.update(self._palette_fields(body))
+            self._write(data)
+        return {**palette, "preset": False}
+
+    def remove_palette(self, pal_id: str) -> None:
+        """Delete it; favourites that used it go back to their effect's default. Raises
+        KeyError."""
+        with self._lock:
+            data = self._read()
+            data["palettes"].remove(_find(data["palettes"], pal_id, "palette"))
+            for fav in data["favourites"]:
+                try:
+                    params = get_effect(fav["effect"]).params
+                except KeyError:
+                    continue
+                for p in params:
+                    if p.kind == "palette" and fav["params"].get(p.name) == pal_id:
+                        fav["params"][p.name] = p.default
+            self._write(data)
+
+    @staticmethod
+    def _palette_fields(body: dict[str, Any]) -> dict[str, Any]:
+        _only(body, {"name", "colors"})
+        colors = body.get("colors")
+        if not isinstance(colors, list) or not 1 <= len(colors) <= pal.MAX_COLORS:
+            raise LibraryError(f"colors must be a list of 1-{pal.MAX_COLORS} colours")
+        try:
+            rgb = [parse_color(c) for c in colors if isinstance(c, str)]
+        except ValueError as e:
+            raise LibraryError(str(e)) from None
+        if len(rgb) != len(colors):
+            raise LibraryError("each colour is text: #rrggbb")
+        return {"name": _name(body.get("name")), "colors": [pal.to_hex(c) for c in rgb]}
 
     def playlist(self, pl_id: str) -> dict[str, Any]:
         """Raises KeyError."""
@@ -177,13 +267,25 @@ class Library:
             data = {}
         except (OSError, ValueError) as e:
             raise OSError(f"can't read {self.path}: {e}") from None
-        return {"favourites": list(data.get("favourites") or []),
-                "playlists": list(data.get("playlists") or [])}
+        old = data.get("version", VERSION) < VERSION
+        return {"favourites": [self._upgrade(f, old) for f in data.get("favourites") or []],
+                "playlists": list(data.get("playlists") or []),
+                "palettes": list(data.get("palettes") or [])}
+
+    def _upgrade(self, fav: dict[str, Any], old: bool) -> dict[str, Any]:
+        """A favourite with every setting its effect has now, for favourites saved by an
+        older version or before the effect gained settings."""
+        try:
+            cls = get_effect(fav["effect"])
+        except KeyError:
+            return fav  # an effect that's gone: it can't play, but keep it
+        n = self._n()
+        return {**fav, "params": cls.check_params(cls.upgrade(fav["params"], n, old), n)}
 
     def _write(self, data: dict[str, Any]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(f".{self.path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps({"version": 1, **data}, indent=1) + "\n")
+        tmp.write_text(json.dumps({"version": VERSION, **data}, indent=1) + "\n")
         os.replace(tmp, self.path)
 
 

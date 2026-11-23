@@ -139,6 +139,24 @@ def test_twinkle_is_reproducible_with_a_seed_and_fades():
     assert last.max() < 60  # earlier twinkles faded out
 
 
+def test_a_custom_palette_and_one_that_is_gone():
+    custom = {"my-00000001": [(0, 0, 255)]}
+    c = ctx()
+    c.palettes = custom.get
+    e = create_effect("rainbow3d", c, {"palette": "my-00000001"})
+    frame = e.render(0.3)
+    assert np.allclose(frame[frame.any(axis=1)], (0, 0, 255))
+    e.set_params({"palette": "my-0000dead"})  # deleted: the default palette
+    assert np.array_equal(e.render(0.3), create_effect("rainbow3d", c).render(0.3))
+
+
+def test_old_settings_carry_over():
+    old = {"color": "gold", "mixed": True, "background": "off", "nope": 1}
+    new = get_effect("ripple").upgrade(old, N, old=True)
+    assert new == {"color": "#ff8c00", "colors": "palette", "palette": "christmas",
+                   "background": "off"}
+
+
 def test_hsv_to_rgb_primaries():
     rgb = hsv_to_rgb(np.array([0, 1 / 3, 2 / 3, 1.0]))
     assert np.allclose(rgb, [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 0, 0]])
