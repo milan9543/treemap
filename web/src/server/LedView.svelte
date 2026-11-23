@@ -8,7 +8,10 @@
   import { onDestroy, onMount } from "svelte";
   import type { DeviceApi, MapInfo } from "./api";
 
-  let { dev, map, gamma = 1 }: { dev: DeviceApi; map: MapInfo; gamma?: number } = $props();
+  let { dev, map, gamma = 1, active = true }: {
+    dev: DeviceApi; map: MapInfo; gamma?: number;
+    active?: boolean; // false while it's hidden: no frames fetched, nothing drawn
+  } = $props();
 
   const FRAME_MS = 50; // ~20 fps
   const UNLIT = 0.09; // how bright an unlit LED is drawn
@@ -88,7 +91,7 @@
 
   async function fetchFrame() {
     if (stopped) return;
-    if (!document.hidden) {
+    if (!document.hidden && active) {
       try {
         const f = await dev.frame();
         if (f.seq !== seq) {
@@ -110,8 +113,10 @@
   }
 
   function loop() {
-    controls.update();
-    renderer.render(scene, camera);
+    if (active) {
+      controls.update();
+      renderer.render(scene, camera);
+    }
     raf = requestAnimationFrame(loop);
   }
 

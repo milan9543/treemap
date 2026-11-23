@@ -1,7 +1,7 @@
 <script lang="ts">
-  // A device's effects: what's playing (polled, so a playlist moving on shows up), the
-  // effect's controls built from GET /effects, brightness, and picking an effect,
-  // favourite or playlist. Favourites and playlists are the server's, shared by every
+  // A device's effects: picking one, what's playing (polled, so a playlist moving on
+  // shows up), the effect's controls built from GET /effects, brightness, and the
+  // favourites and playlists. Favourites and playlists are the server's, shared by every
   // device. Changes go out as you drag, one request at a time with the latest value.
   //
   // "Send to the LEDs" off keeps the frames on this page (the 3D view): a preview.
@@ -23,7 +23,7 @@
 
   let { dev, device, onchange }: { dev: DeviceApi; device: Device; onchange: () => void } = $props();
 
-  type Tab = "favourites" | "effects" | "playlists";
+  type Tab = "favourites" | "playlists";
   const POLL_MS = 1500;
   const GROUPS = [{ group: "3D", title: "3D" }, { group: "Classic", title: "Along the strip" }];
 
@@ -52,15 +52,14 @@
   const nextIn = $derived(Math.max(0, Math.round((nextAt - now) / 1000)));
   const tabs = $derived([
     { value: "favourites" as const, label: `Favourites${favs.length ? ` (${favs.length})` : ""}` },
-    { value: "effects" as const, label: "Effects" },
     { value: "playlists" as const, label: `Playlists${lists.length ? ` (${lists.length})` : ""}` },
   ]);
 
   function loadTab(): Tab {
     try {
-      return (localStorage.getItem("serverEffectsTab") as Tab) || "effects";
+      return localStorage.getItem("serverEffectsTab") === "playlists" ? "playlists" : "favourites";
     } catch {
-      return "effects";
+      return "favourites";
     }
   }
   function setTab(t: Tab) {
@@ -252,16 +251,30 @@
       <Button size="sm" variant="danger" icon={Square} onclick={() => run(() => dev.stop())}>Stop</Button>
     {/if}
   {/snippet}
+  <select class="pick" value={playing?.effect ?? ""} aria-label="Effect" disabled={device.busy === "scan"}
+          onchange={(e) => { const name = e.currentTarget.value; if (name) void run(() => dev.play(name)); }}>
+    {#if !running}<option value="" disabled>Pick an effect…</option>{/if}
+    {#each GROUPS as g (g.group)}
+      {@const fxs = effects.filter((e) => e.group === g.group)}
+      {#if fxs.length}
+        <optgroup label={g.group === "3D" && !hasMap ? `${g.title}: these need the map, scan first` : g.title}>
+          {#each fxs as e (e.name)}
+            <option value={e.name} disabled={e.needs_map && !hasMap}>{e.label}</option>
+          {/each}
+        </optgroup>
+      {/if}
+    {/each}
+  </select>
   {#if running}
     <div class="now">
-      <b>{matching?.name ?? running.label}</b>
+      {#if matching}<b><Star size={13} fill="currentColor" /> {matching.name}</b>{/if}
       {#if playing?.playlist}
         <span class="muted">
           <ListMusic size={12} /> {playing.playlist.name} · next in <span class="mono">{clock(nextIn)}</span>
           <button class="link" onclick={() => run(() => dev.playNext())}><SkipForward size={12} /> Next</button>
         </span>
       {:else}
-        <span class="muted">{matching ? `${running.label}: ` : ""}{running.description}</span>
+        <span class="muted">{running.description}</span>
       {/if}
     </div>
     {#if naming !== null}
@@ -281,7 +294,7 @@
   {:else if device.busy === "scan"}
     <p class="muted">A scan is using the LEDs. Effects can play once it's over.</p>
   {:else}
-    <p class="muted">Nothing. Pick an effect below.</p>
+    <p class="muted">Nothing playing.</p>
   {/if}
   <label class="bright">
     <Sun size={15} />
@@ -341,24 +354,6 @@
           Favourites are shared by every device.</p>
       {/if}
     </Card>
-  {:else if tab === "effects"}
-    {#each GROUPS as g (g.group)}
-      {@const fxs = effects.filter((e) => e.group === g.group)}
-      {#if fxs.length}
-        <Card title={g.title}>
-          {#if g.group === "3D" && !hasMap}<p class="muted">These need the map: scan the device first.</p>{/if}
-          <div class="grid">
-            {#each fxs as e (e.name)}
-              <button class="fx" class:on={playing?.effect === e.name} title={e.description}
-                      disabled={(e.needs_map && !hasMap) || device.busy === "scan"} onclick={() => run(() => dev.play(e.name))}>
-                <b>{e.label}</b>
-                <span>{e.description}</span>
-              </button>
-            {/each}
-          </div>
-        </Card>
-      {/if}
-    {/each}
   {:else}
     <Card>
       {#snippet actions()}
@@ -389,7 +384,8 @@
 <style>
   p { margin: 0; font-size: var(--t-sm); }
   .now { display: flex; flex-direction: column; gap: 2px; font-size: var(--t-sm); }
-  .now b { font-size: var(--t-lg); }
+  .now b { display: inline-flex; align-items: center; gap: 5px; font-size: var(--t-md); color: var(--warn); }
+  .pick { width: 100%; font-size: var(--t-lg); font-weight: 600; padding: 6px 8px; }
   .now span { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
   .link { display: inline-flex; align-items: center; gap: 3px; background: none; border: 0; padding: 0 0 0 6px;
     color: var(--accent); cursor: pointer; font-size: var(--t-sm); }
@@ -407,15 +403,6 @@
   .send span { font-size: var(--t-xs); }
   .tabs :global(.seg) { display: flex; }
   .tabs :global(.seg button) { flex: 1; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
-  .fx { text-align: left; display: flex; flex-direction: column; gap: 2px; padding: var(--s2) var(--s3); cursor: pointer;
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--r1); color: var(--text); }
-  .fx span { font-size: var(--t-xs); color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2;
-    line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .fx:hover:not(:disabled) { border-color: var(--border-strong); background: var(--surface-3); }
-  .fx.on { border-color: var(--accent-border); background: var(--accent-bg); }
-  .fx.on b { color: var(--accent); }
-  .fx:disabled { opacity: 0.45; cursor: not-allowed; }
   .list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--s1); }
   .list li { display: flex; align-items: stretch; gap: 2px; border: 1px solid var(--border); border-radius: var(--r1);
     background: var(--surface); }

@@ -1,11 +1,13 @@
 <script lang="ts">
   // One device: its LEDs in 3D where the scan placed them, lit as they are now; a QR code
-  // that opens the scan page on the phone for this device; its effects.
+  // that opens the scan page on the phone for this device; its effects. On a phone the
+  // 3D view and the controls are two tabs.
   import { ArrowLeft, Copy, Monitor, Pencil, ScanLine, Trash2 } from "@lucide/svelte";
   import { onDestroy, onMount } from "svelte";
   import Alert from "../components/ui/Alert.svelte";
   import Button from "../components/ui/Button.svelte";
   import Card from "../components/ui/Card.svelte";
+  import Segmented from "../components/ui/Segmented.svelte";
   import { deviceApi, scanLink, type Device, type Info, type MapInfo } from "./api";
   import EffectsPanel from "./EffectsPanel.svelte";
   import LedView from "./LedView.svelte";
@@ -22,6 +24,30 @@
   let error = $state<string | null>(null);
   let copied = $state(false);
   let mapKey = "";
+
+  type Pane = "controls" | "preview";
+  const NARROW = "(max-width: 860px)";
+  let narrow = $state(matchMedia(NARROW).matches);
+  let pane = $state<Pane>(loadPane());
+  const panes = [{ value: "controls" as const, label: "Controls" }, { value: "preview" as const, label: "3D preview" }];
+
+  function loadPane(): Pane {
+    try {
+      return localStorage.getItem("serverDevicePane") === "preview" ? "preview" : "controls";
+    } catch {
+      return "controls";
+    }
+  }
+  function setPane(p: Pane) {
+    pane = p;
+    try { localStorage.setItem("serverDevicePane", p); } catch { /* not kept */ }
+  }
+  $effect(() => {
+    const mq = matchMedia(NARROW);
+    const update = () => (narrow = mq.matches);
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  });
 
   const link = $derived(device ? scanLink(info, device) : "");
   const mismatch = $derived(device?.status.wled && device.led_count !== null
@@ -84,20 +110,25 @@
 {#if missing}
   <div class="gone"><p>There's no such device. <a href="#/">Back to the devices</a></p></div>
 {:else if device}
-  <div class="device-page">
+  {#snippet title(d: Device)}
+    <a class="back" href="#/" title="All devices"><ArrowLeft size={18} /></a>
+    <div class="titles">
+      <h1>{d.name}
+        {#if d.virtual}<span class="tag"><Monitor size={11} /> virtual</span>{/if}
+      </h1>
+      <span class="mono muted">{d.host} · {d.led_count ?? "?"} LEDs</span>
+    </div>
+    <Status device={d} long />
+  {/snippet}
+  <div class="device-page" data-pane={pane}>
+    <header class="phone-bar">
+      <div class="phone-title">{@render title(device)}</div>
+      <div class="switch"><Segmented value={pane} onchange={setPane} options={panes} /></div>
+    </header>
     <section class="stage">
-      <header class="head">
-        <a class="back" href="#/" title="All devices"><ArrowLeft size={18} /></a>
-        <div class="titles">
-          <h1>{device.name}
-            {#if device.virtual}<span class="tag"><Monitor size={11} /> virtual</span>{/if}
-          </h1>
-          <span class="mono muted">{device.host} · {device.led_count ?? "?"} LEDs</span>
-        </div>
-        <Status {device} long />
-      </header>
+      <header class="head">{@render title(device)}</header>
       {#if map}
-        <LedView {dev} {map} gamma={device.gamma ?? 1} />
+        <LedView {dev} {map} gamma={device.gamma ?? 1} active={!narrow || pane === "preview"} />
         <div class="legend muted">
           {#if device.send === false}Preview: what the effect would show (the LEDs stay dark)
           {:else if device.effect || device.busy}What the LEDs show{:else}Nothing playing: pick an effect{/if}
@@ -221,8 +252,18 @@
   dd { margin: 0; overflow-wrap: anywhere; }
   .row { display: flex; gap: var(--s2); }
   .gone { padding: var(--s5); }
+  .phone-bar { display: none; }
   @media (max-width: 860px) {
-    .device-page { grid-template-columns: 1fr; grid-template-rows: 55vh auto; height: auto; }
+    .device-page { display: flex; flex-direction: column; height: auto; }
+    .phone-bar { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s3) var(--s4) var(--s2);
+      position: sticky; top: 0; z-index: 2; background: var(--surface); border-bottom: 1px solid var(--border); }
+    .phone-title { display: flex; align-items: center; gap: var(--s3); }
+    .switch :global(.seg) { display: flex; }
+    .switch :global(.seg button) { flex: 1; }
+    .head { display: none; }
+    .stage { height: calc(100dvh - var(--topbar-h) - 108px); min-height: 320px; }
     .side { border-left: 0; overflow: visible; }
+    .device-page[data-pane="controls"] .stage { display: none; }
+    .device-page[data-pane="preview"] .side { display: none; }
   }
 </style>
