@@ -30,7 +30,7 @@
   let solving = $state(false);
   let solved = $state<string | null>(null);
   let front = $state(0);
-  let rotate = $state<0 | 90 | 180 | 270>(0);
+  let rotate = $state(0);
   let mirror = $state(false);
   let saving = $state(false);
   let savedNote = $state(false);
@@ -43,7 +43,7 @@
     const o = map?.orientation;
     if (!o) return false;
     return "front_deg" in o ? Math.round(o.front_deg) !== front
-      : o.rotate_deg !== rotate || o.mirror !== mirror;
+      : Math.round(o.rotate_deg) !== rotate || o.mirror !== mirror;
   });
 
   /** Runs of LEDs that aren't ok, in strip order; a run with a failed LED is missing. */
@@ -69,7 +69,7 @@
     const o = m.orientation;
     if ("front_deg" in o) front = Math.round(o.front_deg) % 360;
     else {
-      rotate = o.rotate_deg;
+      rotate = Math.round(o.rotate_deg) % 360;
       mirror = o.mirror;
     }
   }
@@ -171,8 +171,8 @@
     showFront();
   }
 
-  function turnFlat() {
-    rotate = ((rotate + 90) % 360) as 0 | 90 | 180 | 270;
+  function turnFlat(deg: number) {
+    rotate = (((rotate + deg) % 360) + 360) % 360;
     showEdge();
   }
 
@@ -303,10 +303,17 @@
       {#if flat}
         <h2>Set the bottom</h2>
         <p class="small muted">The LEDs show the layout's bottom edge in white and its left side
-          in red. Turn it until the white is along the bottom. If the red is then on the right,
-          mirror it: the LEDs were filmed from behind.</p>
+          in red. Turn it until the white is along the bottom (the slider turns it by any
+          angle, for strips laid askew). If the red is then on the right, mirror it: the LEDs
+          were filmed from behind.</p>
+        <input class="slider" type="range" min="0" max="359" step="1" aria-label="Turn, in degrees anticlockwise"
+               bind:value={rotate} oninput={showEdge} />
+        <div class="turns">
+          <button aria-label="Turn a quarter clockwise" onclick={() => turnFlat(-90)}>↻ 90°</button>
+          <span class="num deg">{rotate}°</span>
+          <button aria-label="Turn a quarter anticlockwise" onclick={() => turnFlat(90)}>↺ 90°</button>
+        </div>
         <div class="actions">
-          <button onclick={turnFlat}>Turn ↺ 90°</button>
           <button aria-pressed={mirror} class:pressed={mirror} onclick={flip}>Mirror</button>
         </div>
         <p class="small muted num after">

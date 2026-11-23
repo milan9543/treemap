@@ -45,7 +45,7 @@ export interface Info extends DeviceSummary {
 
 /** Which way the map faces: a tree's front (the solved angle that faces the room), or a
  * flat layout mirrored, then turned anticlockwise in quarter turns. */
-export type Orientation = { front_deg: number } | { rotate_deg: 0 | 90 | 180 | 270; mirror: boolean };
+export type Orientation = { front_deg: number } | { rotate_deg: number; mirror: boolean };
 
 /** GET /map: the current map, for the review screen. */
 export interface MapInfo {

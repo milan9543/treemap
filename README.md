@@ -112,8 +112,8 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
    animation isn't lighting. The switch on that card picks their positions:
    the **Scanned map** (what the real tree will use) or, in the simulator, the **True
    tree**. Compare the two to see how much the scan's errors show. The scanned map's
-   "front" is wherever the scan started (the scan page's Review screen can turn it, see
-   [The scan page](#the-scan-page)), so effects that turn round the trunk can start at a
+   "front" is wherever the scan started (the scan page's Review screen and the server's
+   page can turn it, see [The scan page](#the-scan-page)), so effects that turn round the trunk can start at a
    different angle on each.
 
    Press ☆ in Now playing to keep the running effect, with its settings, under
@@ -219,7 +219,7 @@ change:
 | `data/scans/<profile>/overrides.json` | LEDs you asked to interpolate. |
 | `data/camera_colours.json` | How the camera sees each colour of the code, from `treemap camera check`. |
 | `data/camera_check/*.jpg` | One frame of each colour from the last `treemap camera check`. |
-| `data/tree_map.json` | The result: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. The map can also hold an `orientation` (the front, or a flat map's turn and mirror), set on the scan page's Review screen. |
+| `data/tree_map.json` | The result: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. The map can also hold an `orientation` (the front, or a flat map's turn and mirror), set on the scan page's Review screen or the server's page. |
 | `data/devices.json` | `treemap serve`'s devices: name, address, LED count. |
 | `data/devices/<id>/` | One device's map (`tree_map.json`) and its last scan's rounds (`scans/`). Only the current map: a new scan replaces it. |
 | `data/library.json` | Favourites and playlists, shared by every device and by the viewer. |
@@ -296,6 +296,11 @@ LEDs, map, scans and effects. The first time there are none.
   up on the Wi-Fi or in the controller, not by the server: on a Mac, AirDrop's
   background radio (`sudo ifconfig awdl0 down` to test) or WLED's WiFi sleep are the
   usual causes.
+- **Front** (tree) or **Bottom** (flat), once a device has a map: **Set it** shows it on
+  the LEDs (stopping the effect) and in the 3D view, as on the scan page's Review screen:
+  a white stripe at the front, or the bottom edge white and the left side red. Turn it
+  with the slider or the buttons, by the degree (and in quarter turns for a flat
+  layout, with **Mirror**), then **Save**. Every effect follows it.
 - A map from before devices (`data/tree_map.json`) can be taken over by a device with
   the same LED count, from its page.
 - One device is one controller: a tree split over two controllers isn't covered yet.
@@ -353,9 +358,10 @@ Each scan first sets the phone up:
   plane helps find one.
 - **Front (tree):** a vertical stripe lights at the map's front; drag the slider until it
   faces the room. **Bottom (flat):** the bottom edge lights white and the left side red;
-  turn it in quarter turns, and mirror it if the strips were filmed from behind.
-  The map keeps its positions and stores the turn alongside them, so every effect
-  follows it and it can be changed later without scanning again.
+  turn it by any angle (the slider, or quarter turns), and mirror it if the strips were
+  filmed from behind. The map keeps its positions and stores the turn alongside them, so
+  every effect follows it and it can be changed later without scanning again. The
+  server's page can set both too (see [The server](#the-server-treemap-serve)).
 
 ### A virtual WLED: scan your screen
 
@@ -454,8 +460,9 @@ position as the median over the photos. It then works out the angle the phone lo
 at the floor from: the tilt that makes the spacing between neighbouring LEDs as even as
 it is on the strip. The map comes out as seen square-on, with "up" being the top of the
 phone's picture and z = 0, so effects that sweep up, across or out from the middle work;
-those that turn round a tree's trunk don't mean much. The scan page's Review screen can
-turn and mirror it so its bottom is where you want it.
+those that turn round a tree's trunk don't mean much. The scan page's Review screen and
+the server's page can turn it by any angle, and mirror it, so its bottom is where you
+want it.
 
 The viewer shows a flat map upright, the way the phone saw it. With `output: wled` it
 also mirrors what the LEDs show, so you can watch effects and the scan in the browser.

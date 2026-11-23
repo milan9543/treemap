@@ -11,7 +11,7 @@ user after a scan and applied by :meth:`Geometry.of`, so the positions stay as s
 and the orientation can change without scanning again. A tree has ``{"front_deg"}``:
 the angle (θ, as solved) that faces the room. A flat layout has ``{"rotate_deg",
 "mirror"}``: mirrored left to right first (filmed from behind), then turned
-anticlockwise in quarter turns. Format 1 maps load as facing the way they were solved.
+anticlockwise by ``rotate_deg``. Format 1 maps load as facing the way they were solved.
 """
 
 from __future__ import annotations
@@ -27,26 +27,30 @@ import numpy as np
 FORMAT_VERSION = 2
 READS = (1, 2)  # formats this code reads
 STATUSES = ("ok", "interpolated", "failed")
-QUARTER_TURNS = (0, 90, 180, 270)
+
+
+def _degrees(value: Any) -> float | None:
+    """An angle normalised to 0-360 and rounded to a tenth, or None if it isn't one."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not np.isfinite(value):
+        return None
+    return round(float(value) % 360, 1) % 360
 
 
 def check_orientation(value: Any, shape: str) -> dict[str, Any]:
     """A valid orientation for a map of ``shape`` (see the module docs), normalised:
-    ``front_deg`` to 0-360, rounded to a tenth. Raises ValueError saying what's wrong."""
+    angles to 0-360, rounded to a tenth. Raises ValueError saying what's wrong."""
     if not isinstance(value, dict):
         raise ValueError("orientation must be an object")
     if shape == "flat":
-        unknown = set(value) - {"rotate_deg", "mirror"}
-        turn, mirror = value.get("rotate_deg", 0), value.get("mirror", False)
-        if unknown or isinstance(turn, bool) or turn not in QUARTER_TURNS or not isinstance(mirror, bool):
-            raise ValueError('a flat map turns by {"rotate_deg": 0, 90, 180 or 270, "mirror": '
-                             "true or false}")
-        return {"rotate_deg": int(turn), "mirror": mirror}
-    front = value.get("front_deg", 0)
-    if set(value) - {"front_deg"} or isinstance(front, bool) or not isinstance(
-            front, (int, float)) or not np.isfinite(front):
+        turn, mirror = _degrees(value.get("rotate_deg", 0)), value.get("mirror", False)
+        if set(value) - {"rotate_deg", "mirror"} or turn is None or not isinstance(mirror, bool):
+            raise ValueError('a flat map turns by {"rotate_deg": degrees anticlockwise, '
+                             '"mirror": true or false}')
+        return {"rotate_deg": turn, "mirror": mirror}
+    front = _degrees(value.get("front_deg", 0))
+    if set(value) - {"front_deg"} or front is None:
         raise ValueError('a tree turns by {"front_deg": the angle that faces the room}')
-    return {"front_deg": round(float(front) % 360, 1) % 360}
+    return {"front_deg": front}
 
 
 def orient(positions: np.ndarray, status: np.ndarray, orientation: dict[str, Any] | None,

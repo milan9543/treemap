@@ -68,8 +68,12 @@ of the phone's picture. 2.0 lets the user set them on the real LEDs:
 
 - **Tree:** the server lights a vertical stripe at the current front angle; the user drags
   a slider until the stripe faces the room.
-- **Flat:** the server lights the current bottom edge; the user turns it in 90° steps
-  (plus a mirror switch, in case the strips were filmed from behind).
+- **Flat:** the server lights the current bottom edge; the user turns it, in 90° steps or
+  by any angle for strips laid askew (plus a mirror switch, in case the strips were
+  filmed from behind).
+
+Both can be set from the scan page's Review screen or from the device on the server's
+page.
 
 The map keeps its solved positions and stores the orientation alongside them
 (`orientation: {front_deg}` or `{rotate_deg, mirror}`), so it can be changed later
@@ -302,8 +306,13 @@ opened after a scan or from the connect screen. Not yet tried on the phone. Chan
 - Each solve picks its own heading, so solving again (a fix, or more rounds) first turns
   the new positions onto the old map's, using the LEDs ok in both, then keeps its
   orientation (`follow` in [treemap/scan/free.py](treemap/scan/free.py)). A fresh scan resets it.
-- The flat orientation is a mirror, then quarter turns anticlockwise, and the map is
-  normalised again (y 0–1) after turning.
+- The flat orientation is a mirror, then a turn anticlockwise, and the map is
+  normalised again (y 0–1) after turning. The turn was quarter turns only at first;
+  since 2026-11-23 it's any angle (to a tenth of a degree), with a slider beside the
+  quarter turns.
+- Since 2026-11-23 the server's page sets the front or the bottom too, on each device
+  with a map ([viewer/src/server/OrientationCard.svelte](viewer/src/server/OrientationCard.svelte)):
+  the same stripe or edge on the LEDs while it's set, shown in the 3D view as well.
 - `edge` lights the bottom edge white and the left side red, so the mirror can be checked.
 - Ignoring an LED's readings only helps a *misplaced* LED: a red one has no readings to
   drop. So red and yellow runs light blue and offer "scan this part again"
@@ -314,7 +323,7 @@ opened after a scan or from the connect screen. Not yet tried on the phone. Chan
 - **5.1 Map format v2.** `orientation` alongside the positions; `Geometry.of` applies it;
   v1 maps still load (orientation 0).
 - **5.2 Stripe and edge LED modes** on the server.
-- **5.3 Front slider (tree) and 90° turns plus mirror (flat)** on the page.
+- **5.3 Front slider (tree) and turns plus mirror (flat)** on the page.
   **Done when:** a "plane around" effect starts at the front you set.
 - **5.4 Fixing LEDs on the page.** A list of red and yellow LEDs; tap one to light it blue;
   interpolate, or scan that area again.

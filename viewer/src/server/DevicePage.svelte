@@ -9,6 +9,7 @@
   import { deviceApi, scanLink, type Device, type Info, type MapInfo } from "./api";
   import EffectsPanel from "./EffectsPanel.svelte";
   import LedView from "./LedView.svelte";
+  import OrientationCard from "./OrientationCard.svelte";
   import Qr from "./Qr.svelte";
   import Status from "./Status.svelte";
 
@@ -161,6 +162,11 @@
 
       {#if device.led_count !== null}
         {#key id}<EffectsPanel {dev} {device} onchange={load} />{/key}
+      {/if}
+
+      {#if device.map?.fits}
+        {#key id}<OrientationCard {dev} shape={device.map.shape} orientation={device.map.orientation}
+                                  scanning={device.busy === "scan"} onchange={load} />{/key}
       {/if}
 
       <Card title="Device">

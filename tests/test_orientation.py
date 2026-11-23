@@ -51,6 +51,12 @@ def test_a_flat_layout_turns_and_mirrors_and_stays_normalised():
     assert np.allclose(g.xyz[1:3, 0] - g.xyz[1, 0], [0, -0.5])  # LED 2 to the left of 1
     assert not g.valid[3]
 
+    tilted = m.turned({"rotate_deg": -45})  # any angle, e.g. strips taped on askew
+    assert tilted.orientation == {"rotate_deg": 315.0, "mirror": False}
+    g = tilted.geometry
+    assert np.isclose(g.xyz[:3, 1].min(), 0) and np.isclose(g.xyz[:3, 1].max(), 1)
+    assert np.isclose(g.xyz[1, 1], 0) and g.xyz[2, 1] > 0  # turned clockwise: LED 1 lowest
+
 
 def test_solving_again_keeps_the_front_though_the_heading_changes():
     before = spiral_tree().turned({"front_deg": 40})
@@ -98,3 +104,7 @@ def test_a_flat_maps_edge_on_the_leds(serve):  # noqa: F811
     red = (out.frame == (255, 0, 0)).all(axis=1)
     assert white.any() and (P[white, 1] > 0.85).all()  # turned over: the top rows are the bottom
     assert red.any() and (P[red, 0] > 1.35).all()  # and the right side the left
+
+    status, _, m = call(base + "/map/orientation", {"rotate_deg": 7.5, "mirror": True})
+    assert status == 200 and m["orientation"] == {"rotate_deg": 7.5, "mirror": True}
+    assert call(base + "/map/orientation", {"rotate_deg": "up"})[0] == 400

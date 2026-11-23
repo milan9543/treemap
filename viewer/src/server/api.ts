@@ -152,6 +152,7 @@ export function deviceApi(id: string) {
     remove: () => call<unknown>("DELETE", d),
     map: () => call<MapInfo>("GET", `${d}/map`),
     adoptMap: () => call<MapInfo>("POST", `${d}/map/adopt`, {}),
+    setOrientation: (o: Orientation) => call<MapInfo>("POST", `${d}/map/orientation`, o),
     frame: () => call<{ seq: number; rgb: string }>("GET", `${d}/frame`),
     setSend: (on: boolean) => call<{ send: boolean }>("POST", `${d}/send`, { on }),
     leds: (cmd: Record<string, unknown>) => call<unknown>("POST", `${d}/leds`, cmd),

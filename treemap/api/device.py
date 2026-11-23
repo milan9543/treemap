@@ -205,7 +205,7 @@ class DeviceApi:
     @staticmethod
     def _orientation(tree_map: TreeMap) -> dict[str, Any]:
         """The map's orientation, with the defaults filled in."""
-        default = {"rotate_deg": 0, "mirror": False} if tree_map.shape == "flat" else {"front_deg": 0.0}
+        default = {"rotate_deg": 0.0, "mirror": False} if tree_map.shape == "flat" else {"front_deg": 0.0}
         return {**default, **(tree_map.orientation or {})}
 
     # -- endpoints ----------------------------------------------------------------------
