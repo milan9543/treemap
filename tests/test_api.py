@@ -194,7 +194,12 @@ def phone(base: str, api: Api, tree: SimTree, stop: threading.Event,
         img, _ = render(tree.positions, api.output.frame, eye, R)
         batch.append(({"t": t, "fov_v": 55.0}, cv2.imencode(".jpg", img)[1].tobytes()))
         if time.monotonic() - sent >= 0.25:
-            call(base + "/scan/frames", raw=pack_batch(batch), ctype="application/octet-stream")
+            try:
+                call(base + "/scan/frames", raw=pack_batch(batch), ctype="application/octet-stream")
+            except OSError:
+                if stop.is_set():
+                    return  # the test is over and its server is shutting down
+                raise
             batch, sent = [], time.monotonic()
         time.sleep(max(1 / 24 - (time.monotonic() - t0 - t), 0))
 
