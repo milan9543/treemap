@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 
-from treemap.config import config_from_dict
 from treemap.sim.branches import MAIN, TWIG, TWIG_FROM
 from treemap.sim.tree import (
     HEIGHT_RANGE,
@@ -12,7 +11,6 @@ from treemap.sim.tree import (
     StripSpec,
     TreeSpec,
     generate_tree,
-    spec_from_config,
     split_counts,
 )
 
@@ -245,7 +243,7 @@ def test_invalid_specs(bad, match):
         generate_tree(bad, seed=1)
 
 
-def test_spec_from_dict_parses_viewer_json():
+def test_spec_from_dict_parses_the_pages_json():
     s = TreeSpec.from_dict(
         {
             "strips": [{"leds": 120, "length": 9.6, "start": "top"}, {"leds": 80.0, "length": None}],
@@ -278,24 +276,6 @@ def test_spec_from_dict_parses_viewer_json():
 def test_spec_from_dict_rejects(d, match):
     with pytest.raises(SpecError, match=match):
         TreeSpec.from_dict(d)
-
-
-def test_spec_from_config():
-    cfg = config_from_dict(
-        {
-            "sim": {
-                "strips": [{"leds": 100, "length": 7}, {"leds": 200, "start": "top"}],
-                "height": 1.8,
-                "layout": "interleaved",
-                "seed": 3,
-            },
-        }
-    )
-    s = spec_from_config(cfg)
-    assert s.strips == [StripSpec(100, 7, "auto"), StripSpec(200, None, "top")]
-    assert (s.height, s.radius, s.layout, s.seed) == (1.8, None, "interleaved", 3)
-    default = spec_from_config(config_from_dict({}))
-    assert [st.leds for st in default.strips] == [200, 200]
 
 
 # -- misc ---------------------------------------------------------------------------------
@@ -345,5 +325,5 @@ def test_version_2_files_get_the_same_branches():
 def test_load_rejects_unknown_version():
     d = generate_tree(seed=9).to_dict()
     d["version"] = 1
-    with pytest.raises(ValueError, match="regenerate"):
+    with pytest.raises(ValueError, match="make a new one"):
         SimTree.from_dict(d)

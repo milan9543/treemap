@@ -14,8 +14,8 @@ import numpy as np
 class Frame:
     t: float  # s, on the camera's own clock (only differences matter)
     image: np.ndarray  # (H, W, 3) uint8 BGR
-    # Anything else the camera knows, e.g. the sim's field of view ("fov_v", degrees)
-    # and true pose ("eye", "quat") for debugging. Never needed for the scan.
+    # Anything else the camera knows, e.g. its vertical field of view ("fov_v",
+    # degrees), a starting guess for the solve. Never needed for the scan.
     meta: dict[str, Any] = field(default_factory=dict)
 
 
@@ -41,9 +41,6 @@ class Camera(ABC):
         """Drop any queued frames, so the next :meth:`read` is a fresh one."""
         while self._read(0) is not None:
             pass
-
-    def show_detections(self, data: dict[str, Any]) -> None:
-        """Show what the scan sees in the latest frames (on the viewer's phone inset)."""
 
     def close(self) -> None:
         """Release resources. Safe to call more than once."""

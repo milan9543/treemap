@@ -1,4 +1,4 @@
-"""Checks that a camera can scan: frame rate, and whether it reads the code's colours.
+"""Checks that the phone's camera reads the code's colours, before a scan.
 
 The LEDs show each colour of the scan code in turn (red, green, blue, and the white of
 the sync), at the scan's brightness, and the scan's own blob finder reads them; the
@@ -25,7 +25,6 @@ from treemap.scan.track import find_blobs
 
 COLOURS = {"red": 0, "green": 1, "blue": 2, "white": SYNC}
 SYMBOL_NAMES = {0: "red", 1: "green", 2: "blue", SYNC: "white", -1: "unclear"}
-MIN_FPS = 15.0  # below this, a symbol of scan.symbol_ms (150) gets too few frames
 GOOD_SHARE = 0.85  # of blobs read as the right colour (the check digit and votes do the rest)
 NEAR_WHITE = 0.06  # chromaticity distance below which a colour is hard to tell from white
 DIM_SHARE = 0.7  # a colour seen in fewer LEDs than this share of white's is too dim
@@ -54,50 +53,6 @@ def read_for(camera: Camera, seconds: float) -> list:
     return frames
 
 
-EXPOSURES_NS = (500_000, 1_000_000, 2_000_000, 4_000_000, 8_000_000, 16_000_000)
-ISO = 100
-ENOUGH = 0.9  # of the most LEDs any exposure sees
-
-
-def fix_exposure(camera: Camera, output: LedOutput, brightness: int,
-                 seconds: float = 2.5) -> str | None:
-    """Fix the camera's exposure and white balance for the scan, so colours don't drift
-    while the LEDs flash. The LEDs show white at the scan's brightness (the brightest
-    the code gets) meanwhile. Only for cameras that can (the Android one); returns what
-    was done, or None if there's nothing it can do.
-
-    - Manual exposure (IP Webcam on most phones): try each of EXPOSURES_NS and keep the
-      shortest that sees nearly as many LEDs as the best; shorter clips less.
-    - Exposure lock (older phones): let automatic exposure adjust, then lock it.
-    """
-    state = camera.exposure() if hasattr(camera, "exposure") else None
-    if state is None or state["kind"] is None:
-        return None
-    output.show(solid(output.led_count, SYNC, brightness))
-    if state["kind"] == "manual":
-        camera.lock(True, exposure=False)  # white balance
-        seen = []
-        for ns in EXPOSURES_NS:
-            if not camera.set_exposure(ns, ISO):
-                return "couldn't set the exposure; set it in IP Webcam"
-            read_for(camera, 0.7)  # frames from before the change
-            counts = [len(find_blobs(f.image)) for f in read_for(camera, 0.4)]
-            seen.append(int(np.median(counts)) if counts else 0)
-        if max(seen) == 0:
-            camera.set_exposure(EXPOSURES_NS[2], ISO)
-            return "no LEDs seen at any exposure: point the phone at the LEDs"
-        best = next(ns for ns, k in zip(EXPOSURES_NS, seen) if k >= ENOUGH * max(seen))
-        camera.set_exposure(best, ISO)
-        read_for(camera, 0.7)
-        return (f"exposure {best / 1e6:g} ms at ISO {ISO} (LEDs seen per exposure: "
-                + ", ".join(f"{ns / 1e6:g} ms {k}" for ns, k in zip(EXPOSURES_NS, seen)) + ")")
-    camera.lock(False)
-    read_for(camera, seconds)  # keep the stream flowing while it adjusts
-    ok = camera.lock(True)
-    return "adjusted exposure and white balance to the LEDs, then locked them" if ok else \
-        "couldn't lock exposure and white balance; lock them in IP Webcam"
-
-
 @dataclass
 class ColourResult:
     name: str
@@ -105,14 +60,6 @@ class ColourResult:
     share: float  # of blobs read as this colour with the measured colours (NaN if none)
     misread_as: str | None  # the commonest wrong reading
     sample: np.ndarray | None  # one frame, BGR
-
-
-def measure_fps(camera: Camera, seconds: float = 3.0) -> tuple[float, tuple[int, int] | None]:
-    frames = read_for(camera, seconds)
-    if len(frames) < 2:
-        return 0.0, None
-    h, w = frames[-1].image.shape[:2]
-    return (len(frames) - 1) / max(frames[-1].t - frames[0].t, 1e-6), (w, h)
 
 
 def colour_check(camera: Camera, output: LedOutput, brightness: int, settle_s: float = 0.6,
@@ -156,17 +103,9 @@ def colour_check(camera: Camera, output: LedOutput, brightness: int, settle_s: f
     return results, model
 
 
-def advice(fps: float | None, size: tuple[int, int] | None, results: list[ColourResult],
-           model: ColourModel | None, brightness: int) -> list[str]:
-    """What to change, if anything; empty if the camera is fit to scan. ``fps`` None:
-    not measured (the scan page's camera, whose frame rate it shows itself)."""
+def advice(results: list[ColourResult], model: ColourModel | None, brightness: int) -> list[str]:
+    """What to change, if anything; empty if the camera is fit to scan."""
     tips = []
-    if fps is not None and fps < MIN_FPS:
-        tips.append(f"only {fps:.0f} frames/s; the scan needs {MIN_FPS:.0f}+ (24 is better). "
-                    "Lower IP Webcam's video resolution or quality (Video preferences).")
-    if size is not None and size[0] > 1280:
-        tips.append(f"frames are {size[0]}x{size[1]}; 1280x720 or 640x480 is plenty and "
-                    "faster to send and to read.")
     few = [r.name for r in results if r.blobs < 10]
     if few:
         tips.append(f"few LEDs seen in {', '.join(few)}: point the phone at the LEDs, from "

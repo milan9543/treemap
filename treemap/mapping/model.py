@@ -196,7 +196,7 @@ class TreeMap:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(self.to_dict(), separators=(",", ":")))
-        tmp.replace(path)  # atomic, so the viewer never reads a half-written file
+        tmp.replace(path)  # atomic: never read half-written
 
     @classmethod
     def load(cls, path: str | Path) -> TreeMap:

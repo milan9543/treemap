@@ -3,7 +3,7 @@
 // - rotate (the default): drag to turn round the layout, scroll to zoom, right-drag to
 //   pan. It can also turn by itself, slowly, so a phone held still in front of the
 //   screen films the tree as if walking round it.
-// - walk: first person, as in the viewer's walk mode: WASD or the arrows to move, Space
+// - walk: first person: WASD or the arrows to move, Space
 //   up, Shift down, and the mouse to look once the view has captured it (click).
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";

@@ -92,25 +92,6 @@ def test_gamma_darkens_mid_levels_only():
     engine.stop()
 
 
-def test_switching_the_map_live(tmp_path):
-    from treemap.mapping.source import MapSource
-    from treemap.sim.tree import TreeSpec, generate_tree
-
-    generate_tree(TreeSpec.uniform(N, 1), seed=1).save(tmp_path / "tree.json")
-    source = MapSource(tmp_path / "map.json", tmp_path / "tree.json", choice="truth")
-    changes = []
-    engine = Engine(lambda: ThreadSafeOutput(N), EffectContext(n=N, tree_map=source),
-                    on_change=lambda: changes.append(engine.state()))
-    engine.start("rainbow3d")
-    assert changes[-1]["map"] == "truth" and changes[-1]["maps"] == ["scanned", "truth"]
-    with pytest.raises(LookupError, match="no tree map yet"):
-        engine.set_map("scanned")  # nothing scanned: refused, and the effect keeps its map
-    assert source.choice == "truth"
-    engine.stop()
-    engine.set_map("scanned")  # fine with no 3D effect running
-    assert changes[-1]["map"] == "scanned"
-
-
 def test_live_params_and_validation():
     engine, outputs, changes = make()
     engine.start("solid", {"color": "red"})

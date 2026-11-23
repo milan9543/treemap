@@ -1,4 +1,5 @@
-"""Background jobs for the viewer: scan, reconstruct, fix and evaluate.
+"""Background jobs for a device on ``treemap serve``: scan, solve again, and ignore an
+LED's readings.
 
 One job runs at a time on its own thread; its state (progress, the result or error) is
 reported through ``on_change`` so the server can broadcast it. The scan lights the LEDs,
@@ -14,7 +15,6 @@ Job kinds and their parameters:
   the shape they were scanned in) and runs until every LED is ok, the rounds are done,
   or it's stopped.
 * ``reconstruct``: solve again from the saved rounds
-* ``evaluate`` (simulator only)
 * ``interpolate``, ``measure``: ``index``; interpolate ignores that LED's observations
   from now on, measure uses them again. Each rebuilds the map afterwards.
 """
@@ -36,7 +36,7 @@ from treemap.outputs.base import LedOutput
 
 log = logging.getLogger(__name__)
 
-KINDS = ("scan", "reconstruct", "evaluate", "interpolate", "measure")
+KINDS = ("scan", "reconstruct", "interpolate", "measure")
 USES_LEDS = ("scan",)
 
 
@@ -53,21 +53,19 @@ class Jobs:
         self,
         cfg: Config,
         output_factory: Callable[[], LedOutput],
+        camera: Camera,
+        camera_id: str,
         stop_effects: Callable[[], None] = lambda: None,
         on_change: Callable[[dict], None] | None = None,
         progress_interval: float = 0.1,
-        sim_port: int | None = None,
-        camera: Camera | None = None,
-        camera_id: str | None = None,
         camera_ready: workflow.CameraReady | None = None,
         next_round: Callable[[int, Callable[[], None]], bool] | None = None,
     ) -> None:
         self.cfg = cfg
-        self.sim_port = sim_port  # where the viewer's camera frames come from
-        # The camera scans use instead of the configured one (the phone's page, for
-        # `treemap serve`), and the name its measured colours are kept under. A scan
-        # that names its phone (`camera`) waits on `camera_ready` for the page to set
-        # the exposure, then measures that phone's colours.
+        # The camera scans use (the phone's page), and the name measured colours are kept
+        # under when a scan doesn't name its phone. A scan that names its phone
+        # (`camera`) waits on `camera_ready` for the page to set the exposure, then
+        # measures that phone's colours.
         self.camera, self.camera_id, self.camera_ready = camera, camera_id, camera_ready
         self.next_round = next_round  # for those scans too: rounds start when the user says
         self.output_factory = output_factory
@@ -141,7 +139,7 @@ class Jobs:
             self._update(status="cancelled", message="stopped; finished rounds were saved")
         except workflow.WorkflowError as e:
             self._update(status="error", error=str(e))
-        except Exception as e:  # noqa: BLE001 - shown in the viewer
+        except Exception as e:  # noqa: BLE001 - shown on the page
             log.exception("job failed")
             self._update(status="error", error=f"{type(e).__name__}: {e}")
         else:
@@ -221,10 +219,9 @@ class Jobs:
             next_round = self.next_round
 
         def run() -> dict:
-            workflow.ensure_sim_tree(cfg)
             tree_map = self._with_output(lambda out: workflow.run_scan(
-                cfg, out, rounds=rounds, fresh=not add, sim_port=self.sim_port, camera=self.camera,
-                camera_id=camera_id, camera_ready=camera_ready, next_round=next_round,
+                cfg, out, self.camera, camera_id, rounds=rounds, fresh=not add,
+                camera_ready=camera_ready, next_round=next_round,
                 on_update=self._on_update, check_cancel=self._check_cancel,
                 on_message=lambda m: self._update(message=m),
             ))
@@ -235,12 +232,6 @@ class Jobs:
     def _prepare_reconstruct(self, p: dict) -> Callable[[], dict]:
         def run() -> dict:
             return workflow.map_summary(workflow.rebuild_map(self.cfg)[0])
-
-        return run
-
-    def _prepare_evaluate(self, p: dict) -> Callable[[], dict]:
-        def run() -> dict:
-            return workflow.evaluation_summary(workflow.evaluate_sim(self.cfg))
 
         return run
 

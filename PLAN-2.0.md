@@ -115,11 +115,14 @@ alone is ignored. Chrome reads manual exposure back as `exposureMode: "none"`.
 ## What stays, what goes
 
 - **Stays:** `scan/` (decode, solve, cleanup), `mapping/`, `effects/`, `engine.py`,
-  `outputs/` (DDP), `workflow.py`, the simulator and the 3D viewer for development.
-- **Goes:** `cameras/android.py` (IP Webcam) once the browser camera works on the real tree.
-  Keep it until then.
+  `outputs/` (DDP), `workflow.py`, and the tree and flat generators (now the virtual
+  WLED's, and the scan tests' ground truth).
+- **Gone** (2026-11-23, see [Phase 6c](#phase-6c-the-1x-commands-and-the-viewer-go)): the
+  1.x command line and the simulator's 3D viewer, with what only they used: the IP
+  Webcam camera, the viewer's virtual phone and output, the config's `output`,
+  `controllers`, `camera` and `sim`.
 - **New:** an `HttpCamera` (frames arrive on `POST /scan/frames` and feed the same
-  `Camera` interface as `BrowserCamera`), the API layer, the scan page, MQTT.
+  `Camera` interface the 1.x cameras did), the API layer, the scan page, MQTT.
 
 ## Risks
 
@@ -190,7 +193,8 @@ status as one letter (o, i, f).
   **Done when:** the server starts with only the hosts configured.
 - **2.5b Frame timing.** Measure render time, send time and frames that fell behind;
   show them in `/info` and warn when the engine can't keep its frame rate. Check WLED's
-  "Disable WiFi sleep" in `treemap wled check`.
+  "Disable WiFi sleep" in `treemap wled check` (gone with the 1.x commands in Phase 6c;
+  not on the server's page yet).
   **Done when:** effects run without visible stutter on 400 LEDs, and the numbers show why
   if they don't.
   Since 2026-11-23 the timing also has the gap from one frame to the next (`gap_ms`),
@@ -234,8 +238,8 @@ and `counts` after a stopped or finished scan too, but only for a map that scan 
 ## Phase 3b: a virtual WLED to scan on screen
 
 **Built** (2026-11-21): `treemap sim wled` ([treemap/sim/virtual_wled.py](treemap/sim/virtual_wled.py),
-page `viewer/wled.html`). This computer acts as a WLED controller with a simulated tree or
-flat layout ([treemap/sim/flat.py](treemap/sim/flat.py): rows or a spiral) on its
+page `web/wled.html`, `viewer/wled.html` until Phase 6c). This computer acts as a WLED
+controller with a simulated tree or flat layout ([treemap/sim/flat.py](treemap/sim/flat.py): rows or a spiral) on its
 screen, so the whole 2.0 path can be tried with only a phone, and Phase 4's exposure and
 colours can be tuned on it. `treemap serve` drives it unchanged (`output: wled`, a
 controller `host` with the HTTP port). You walk round it with the viewer's walk keys
@@ -311,7 +315,7 @@ opened after a scan or from the connect screen. Not yet tried on the phone. Chan
   since 2026-11-23 it's any angle (to a tenth of a degree), with a slider beside the
   quarter turns.
 - Since 2026-11-23 the server's page sets the front or the bottom too, on each device
-  with a map ([viewer/src/server/OrientationCard.svelte](viewer/src/server/OrientationCard.svelte)):
+  with a map ([web/src/server/OrientationCard.svelte](web/src/server/OrientationCard.svelte)):
   the same stripe or edge on the LEDs while it's set, shown in the 3D view as well.
 - `edge` lights the bottom edge white and the left side red, so the mirror can be checked.
 - Ignoring an LED's readings only helps a *misplaced* LED: a red one has no readings to
@@ -331,7 +335,7 @@ opened after a scan or from the connect screen. Not yet tried on the phone. Chan
 ## Phase 6: effects on the page
 
 **Built** (2026-11-22): an **Effects** screen, first on the scan page, then moved to the
-server's own page in Phase 6b ([viewer/src/server/EffectsPanel.svelte](viewer/src/server/EffectsPanel.svelte)); favourites and playlists in `data/library.json`
+server's own page in Phase 6b ([web/src/server/EffectsPanel.svelte](web/src/server/EffectsPanel.svelte)); favourites and playlists in `data/library.json`
 ([treemap/library.py](treemap/library.py)), played by [treemap/player.py](treemap/player.py).
 Tested through the API on this Mac; not yet tried on the phone. Changes from the sketch:
 - `GET /effects` leaves out the test patterns and scan views (Diagnostics, Mapping) and
@@ -346,7 +350,8 @@ Tested through the API on this Mac; not yet tried on the phone. Changes from the
   favourite takes it out of playlists.
 - **The viewer keeps its favourites on its server too** (same file, over its websocket),
   so the "one-time import" is automatic: the first time it connects it hands over what
-  it kept in localStorage (stale settings get defaults, duplicates are skipped).
+  it kept in localStorage (stale settings get defaults, duplicates are skipped). Gone
+  with the viewer in Phase 6c, `POST /favourites/import` too.
 - The brightness isn't saved: it's back to `engine.brightness` after a restart (Phase 7's
   light entity may want that).
 
@@ -359,8 +364,9 @@ Tested through the API on this Mac; not yet tried on the phone. Changes from the
 ## Phase 6b: devices and the server's page
 
 **Built** (2026-11-22). `treemap serve` runs with no controllers configured and keeps
-running while they're off. Its page ([viewer/src/server/](viewer/src/server/), built
-with the viewer into `treemap/sim/viewer_dist/server.html`) lists the devices, adds one
+running while they're off. Its page ([web/src/server/](web/src/server/), built
+into `treemap/web_dist/server.html`; `viewer/` and `treemap/sim/viewer_dist/` until
+Phase 6c) lists the devices, adds one
 by address, and shows each with:
 - whether its controller answers (the server asks each one's `/json/info` every 5 s),
   its WLED name, version and LED count, and a warning with a fix when WLED's count changes;
@@ -389,11 +395,35 @@ Changes:
   config.
 - **`treemap serve --sim` and `treemap sim view --serve` are gone**: the virtual WLED
   replaces them. `config.yaml`'s `output` and `controllers` are now only for the 1.x
-  commands (`treemap scan`, `treemap run`, …). New: `server.scan_page`, which the QR codes
-  open and the server allows.
+  commands (`treemap scan`, `treemap run`, …; all gone in Phase 6c). New:
+  `server.scan_page`, which the QR codes open and the server allows.
 - Not covered yet: a tree split over two controllers (one device per controller for now).
 
 Not yet tried with the phone or the real tree.
+
+## Phase 6c: the 1.x commands and the viewer go
+
+**Done** (2026-11-23). The server, the scan page and the virtual WLED cover everything the
+1.x tools did, so these are removed, with the code only they used:
+
+- **The command line** but for `treemap serve` and `treemap sim wled`: `scan`,
+  `reconstruct`, `show-mapping`, `fix`, `run`, `effects`, `test …`, `camera check`,
+  `wled check`, `sim new`, `sim view`, `sim evaluate`, `config show`.
+- **The simulator's 3D viewer** (`treemap sim view`): its page, its server
+  (`treemap/sim/server.py`, websockets), its virtual phone (`BrowserCamera`) and output
+  (`SimOutput`), and the "true tree" map choice for effects.
+- **The IP Webcam camera** (`cameras/android.py`) and the exposure search for it.
+- **The effects that were test patterns or scan views** (index chase, markers, single
+  LED, map status, verify sweep): `POST /leds` does those now.
+- **Config keys** `output`, `controllers`, `camera` (its `fov_deg` is now
+  `scan.fov_deg`), `sim` and `scan.camera_fps`. An old `config.local.yaml` still loads:
+  they're ignored with a warning.
+- `ROADMAP.md`, the 1.x plan.
+
+`viewer/` is now `web/` (the server's page and the virtual WLED's screen), built into
+`treemap/web_dist/`. Kept: the tree and flat generators, the scan tests that use them as
+ground truth, and taking over a 1.x map (`data/tree_map.json`) from a device's page.
+`treemap wled check`'s WiFi-sleep and brightness warnings aren't on the server's page yet.
 
 ## Phase 7: Home Assistant
 
@@ -413,8 +443,8 @@ Not yet tried with the phone or the real tree.
   server has its own page for devices and effects; the scan page is only hosted.
   Was: **The server serves its own copy of the page** over plain HTTP, for effects without
   internet and as a fallback.
-- **8.6 Retire IP Webcam** (`cameras/android.py`) once the browser camera has scanned the
-  real tree.
+- ~~**8.6 Retire IP Webcam**~~ Done in Phase 6c, with the rest of 1.x, before the browser
+  camera has scanned the real tree.
 
 ## Phase 9: the real tree, end to end
 

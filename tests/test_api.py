@@ -20,8 +20,7 @@ from treemap.api.device import DeviceApi
 from treemap.cameras.http import pack_batch
 from treemap.config import config_from_dict
 from treemap.outputs.base import LedOutput
-from treemap.sim.tree import SimTree
-from treemap.workflow import ensure_sim_tree
+from treemap.sim.tree import SimTree, generate_tree
 
 PAGE = "https://page.example"
 
@@ -39,22 +38,22 @@ class Recorder(LedOutput):
 
 @pytest.fixture
 def serve(tmp_path):
-    """A server with one device (whose controller is off) for the simulated tree's LEDs:
-    the device's API and the base of its endpoints. ``dev.output.frame`` is what its
-    LEDs show."""
+    """A server with one device (whose controller is off) for a simulated tree's LEDs
+    (``sim_tree(api)``): the device's API and the base of its endpoints.
+    ``dev.output.frame`` is what its LEDs show."""
     servers = []
 
     def _serve(**cfg_overrides) -> tuple[DeviceApi, str]:
-        cfg = config_from_dict({"server": {"origins": [PAGE]}, "sim": {"seed": 3},
-                                **cfg_overrides})
+        cfg = config_from_dict({"server": {"origins": [PAGE]}, **cfg_overrides})
         cfg.base_dir = tmp_path
-        ensure_sim_tree(cfg)
+        tree = generate_tree(seed=3)
+        tree.save(tmp_path / "sim_tree.json")
         api = Api(cfg, open_leds=lambda record, c: Recorder(record.led_count), check_s=60)
         server = HttpServer(api.router, "127.0.0.1", 0, cfg.server.origins).start()
         servers.append((server, api))
         root = f"http://127.0.0.1:{server.port}/api/v2"
         status, _, device = call(root + "/devices", {"host": "127.0.0.1:9", "name": "Tree",
-                                                     "led_count": cfg.led_count})
+                                                     "led_count": tree.led_count})
         assert status == 201, device
         return api.devices[device["id"]].api, f"{root}/devices/{device['id']}"
 
@@ -62,6 +61,11 @@ def serve(tmp_path):
     for server, api in servers:
         server.stop()
         api.close()
+
+
+def sim_tree(api) -> SimTree:
+    """The simulated tree the ``serve`` fixture's device has the LEDs of."""
+    return SimTree.load(api.cfg.base_dir / "sim_tree.json")
 
 
 def call(url, body=None, method=None, headers=None, raw=None, ctype="application/json"):
@@ -153,16 +157,12 @@ def test_effects_favourites_and_playlists(serve):
                                                              "params": playing["params"]}, "PUT")
     assert status == 200 and fav["name"] == "Slow" and fav["params"]["speed"] == 1
 
-    # The viewer's favourites come in once: stale settings get defaults, repeats are skipped.
-    old = [{"id": "a-b", "name": "Old", "effect": "solid", "params": {"color": "nonsense"}},
-           {"id": "zz", "name": "Again", "effect": "rainbow", "params": fav["params"]},
-           {"name": "Gone", "effect": "no-such-effect", "params": {}}]
-    result = call(root + "/favourites/import", {"favourites": old})[2]
-    assert (result["added"], result["skipped"]) == (1, 2)
-    solid = next(f for f in result["favourites"] if f["id"] == "a-b")
+    status, _, solid = call(root + "/favourites", {"name": "Red", "effect": "solid",
+                                                   "params": {"color": "red"}})
+    assert status == 201
 
     # A playlist moves on by itself; deleting a favourite takes it out of playlists.
-    items = [{"favourite": fav["id"], "duration_s": 5}, {"favourite": "a-b", "duration_s": 5}]
+    items = [{"favourite": fav["id"], "duration_s": 5}, {"favourite": solid["id"], "duration_s": 5}]
     status, _, pl = call(root + "/playlists", {"name": "Evening", "items": items})
     assert status == 201 and pl["crossfade_s"] == 3
     assert call(root + "/playlists", {"name": "Bad", "items": [{"favourite": "nope"}]})[0] == 400
@@ -201,7 +201,7 @@ def phone(base: str, api: Api, tree: SimTree, stop: threading.Event,
 
 def test_a_scan_through_the_api(serve):
     api, base = serve(scan={"round_s": 7.0, "status_s": 0.5, "countdown_s": 0.5})
-    tree = SimTree.load(api.cfg.sim_tree_path)
+    tree = sim_tree(api)
     stop = threading.Event()
     threading.Thread(target=phone, args=(base, api, tree, stop), daemon=True).start()
     try:
@@ -248,7 +248,7 @@ def test_the_page_sets_the_phone_up(serve):
     """A scan that names its phone waits for the page to set the exposure (probing how
     many LEDs the frames show), then measures and keeps that phone's colours."""
     api, base = serve(scan={"countdown_s": 0.3})
-    tree = SimTree.load(api.cfg.sim_tree_path)
+    tree = sim_tree(api)
     stop = threading.Event()
     clock: dict[str, float] = {}
     threading.Thread(target=phone, args=(base, api, tree, stop, clock), daemon=True).start()

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 import pytest
@@ -11,59 +12,36 @@ def test_defaults_when_no_config_file():
     cfg = load_config()
     assert cfg == Config()
     assert cfg.source is None
-    assert cfg.led_count == 400
-    assert cfg.output == "sim"
-    assert cfg.camera.type == "sim"
+    assert cfg.shape == "tree" and cfg.gamma == 2.2
 
 
 def test_repo_config_yaml_is_valid_and_matches_defaults():
     cfg = load_config(REPO_ROOT / "config.yaml")
-    d, defaults = cfg.to_dict(), Config().to_dict()
-    # the file spells out the strips that the default (None) stands for
-    assert d["sim"].pop("strips") == [{"leds": 200, "length": None, "start": "auto"}] * 2
-    defaults["sim"].pop("strips")
-    assert d == defaults
-
-
-def test_sim_strips(write_config):
-    write_config(
-        "sim:\n  strips:\n    - {leds: 150, length: 12}\n    - {leds: 100, start: top}\n"
-    )
-    cfg = load_config()
-    assert [(s.leds, s.length, s.start) for s in cfg.sim.strips] == [
-        (150, 12, "auto"),
-        (100, None, "top"),
-    ]
+    assert cfg.to_dict() == Config().to_dict()
 
 
 def test_partial_sections_merge_with_defaults(write_config):
-    write_config("scan:\n  symbol_ms: 300\nsim:\n  seed: 7\n")
+    write_config("scan:\n  symbol_ms: 300\n")
     cfg = load_config()
     assert cfg.scan.symbol_ms == 300
     assert cfg.scan.round_s == 12.0
-    assert cfg.sim.seed == 7
-    assert cfg.sim.port == 8765
 
 
 def test_empty_file_and_null_section_use_defaults(write_config):
     write_config("")
     assert load_config() == Config()
-    write_config("camera:\n")
+    write_config("scan:\n")
     assert load_config() == Config()
 
 
-def test_two_controllers(write_config):
-    write_config(
-        "output: wled\n"
-        "controllers:\n"
-        "  - {host: a, start: 0, count: 200}\n"
-        "  - {host: b, start: 200, count: 200, reverse: true}\n"
-    )
-    cfg = load_config()
-    assert [(c.host, c.start, c.count, c.reverse) for c in cfg.controllers] == [
-        ("a", 0, 200, False),
-        ("b", 200, 200, True),
-    ]
+def test_1x_keys_are_ignored_with_a_warning(write_config, caplog):
+    write_config("shape: flat\noutput: wled\ncontrollers:\n  - host: a\ncamera: {type: android}\n"
+                 "scan: {camera_fps: 24, symbol_ms: 200}\n", name="config.local.yaml")
+    with caplog.at_level(logging.WARNING):
+        cfg = load_config()
+    assert cfg.shape == "flat" and cfg.scan.symbol_ms == 200
+    assert "config.local.yaml: ignoring camera, controllers, output" in caplog.text
+    assert "scan.camera_fps" in caplog.text
 
 
 def test_relative_paths_resolve_against_config_dir(tmp_path, write_config):
@@ -73,16 +51,16 @@ def test_relative_paths_resolve_against_config_dir(tmp_path, write_config):
     path.write_text("scan:\n  profile: living-room\n")
     cfg = load_config(path)
     assert cfg.base_dir == sub
-    assert cfg.resolve(cfg.sim.tree_file) == sub / "data" / "sim_tree.json"
     assert cfg.scan_dir == sub / "data" / "scans" / "living-room"
+    assert cfg.colours_path_for("Pixel 9, back") == sub / "data" / "camera_colours" / "pixel-9-back.json"
     assert cfg.resolve("/abs/file") == Path("/abs/file")
 
 
 def test_env_var_selects_config(tmp_path, monkeypatch):
     path = tmp_path / "env.yaml"
-    path.write_text("sim: {strips: [{leds: 50}]}\n")
+    path.write_text("shape: flat\n")
     monkeypatch.setenv("TREEMAP_CONFIG", str(path))
-    assert load_config().led_count == 50
+    assert load_config().shape == "flat"
 
 
 def test_explicit_missing_file_is_an_error(tmp_path):
@@ -91,7 +69,7 @@ def test_explicit_missing_file_is_an_error(tmp_path):
 
 
 def test_invalid_yaml_is_an_error(write_config):
-    write_config("output: [1,\n")
+    write_config("shape: [1,\n")
     with pytest.raises(ConfigError, match="invalid YAML"):
         load_config()
 
@@ -100,35 +78,16 @@ def test_invalid_yaml_is_an_error(write_config):
     "data, match",
     [
         ({"ledcount": 400}, "unknown key.*ledcount"),
-        ({"camera": {"typ": "sim"}}, r"camera: unknown key.*typ"),
         ([1, 2], "expected a mapping"),
-        ({"led_count": 400}, "led_count is no longer set"),
-        ({"output": "dmx"}, "output must be one of sim, wled"),
-        ({"controllers": {"host": "a"}}, "controllers: expected a list"),
-        ({"controllers": [{"start": 0}]}, r"controllers\[0\]: missing required key.*host"),
-        ({"output": "wled", "controllers": [{"host": "a", "start": 10, "count": 5}]},
-         "no controller drives LEDs 0-9"),
-        ({"controllers": [{"host": "a", "reverse": "yes"}]}, "reverse must be true or false"),
-        (
-            {"controllers": [{"host": "a", "count": 250}, {"host": "b", "start": 200, "count": 200}]},
-            "overlap",
-        ),
-        ({"output": "wled", "controllers": []}, "needs at least one entry"),
-        ({"camera": {"type": "webcam"}}, "camera.type must be one of"),
-        ({"camera": {"type": "android"}}, "needs camera.url"),
+        ({"shape": "cone"}, "shape must be one of tree, flat"),
         ({"scan": {"angles": [0, 90]}}, "unknown key"),
         ({"scan": {"symbol_ms": 10}}, "symbol_ms must be >= 40"),
         ({"scan": {"brightness": 300}}, "brightness must be <= 255"),
-        ({"camera": {"fov_deg": 5}}, "fov_deg must be >= 20"),
+        ({"scan": {"fov_deg": 5}}, "fov_deg must be >= 20"),
         ({"scan": {"profile": "a/b"}}, "profile"),
-        ({"sim": {"port": 70000}}, "port must be <= 65535"),
-        ({"sim": {"seed": 1.5}}, "seed must be an integer"),
-        ({"sim": {"strips": [{"leds": 400, "colour": "red"}]}}, r"strips\[0\]: unknown key"),
-        ({"sim": {"strips": [{"leds": 400, "length": 1}]}}, r"sim: strip 1: .*cm between LEDs"),
-        ({"sim": {"strips": [{"leds": 400, "start": "middle"}]}}, "sim: strip 1 start"),
-        ({"sim": {"layout": "spiral"}}, "sim: layout"),
-        ({"sim": {"height": "tall"}}, "sim.height must be a number"),
-        ({"sim": {"quirks": "yes"}}, "sim.quirks must be true or false"),
+        ({"engine": {"gamma": 5}}, "gamma must be <= 3"),
+        ({"server": {"port": 70000}}, "port must be <= 65535"),
+        ({"server": {"origins": ["https://a.example/path"]}}, "isn't an origin"),
     ],
 )
 def test_invalid_values_are_rejected(data, match):
@@ -137,55 +96,14 @@ def test_invalid_values_are_rejected(data, match):
 
 
 def test_error_message_names_the_file(write_config):
-    path = write_config("output: dmx\n")
-    with pytest.raises(ConfigError, match=r"config\.yaml: output must be"):
+    path = write_config("shape: cone\n")
+    with pytest.raises(ConfigError, match=r"config\.yaml: shape must be"):
         load_config(path)
 
 
-def test_led_count_comes_from_the_tree_or_the_controllers(tmp_path):
-    from treemap.sim.tree import TreeSpec, generate_tree
-
-    cfg = config_from_dict({"sim": {"strips": [{"leds": 120}]}})
-    assert cfg.led_count == 120  # no tree yet: the one sim.strips describes
-    generate_tree(TreeSpec.uniform(300, 3), seed=1).save(cfg.sim_tree_path)
-    assert cfg.led_count == 300  # the tree, e.g. one generated in the viewer
-    generate_tree(TreeSpec.uniform(80, 1), seed=1).save(cfg.sim_tree_path)
-    assert cfg.led_count == 80  # re-read when it changes
-    wled = config_from_dict({"output": "wled", "controllers": [
-        {"host": "a", "count": 200}, {"host": "b", "start": 200, "count": 250}]})
-    assert wled.led_count == 450
-
-
-def test_controllers_need_only_a_host(monkeypatch):
-    """A missing count is read from WLED; a missing start follows the previous controller."""
-    from treemap.outputs import OutputError
-    from treemap.outputs import wled
-
-    counts = {"a": 150, "b": 250}
-    asked = []
-
-    def fake_fetch(host, timeout=3.0):
-        asked.append(host)
-        if host not in counts:
-            raise OutputError(f"can't connect to http://{host}/")
-        return {"info": {"leds": {"count": counts[host]}}}
-
-    monkeypatch.setattr(wled, "fetch_state", fake_fetch)
-    cfg = config_from_dict({"output": "wled", "controllers": [
-        {"host": "a"}, {"host": "b", "reverse": True}]})
-    assert cfg.led_count == 400
-    assert [(c.start, c.count, c.reverse) for c in cfg.controller_layout()] == [
-        (0, 150, False), (150, 250, True)]
-    assert cfg.led_count == 400 and asked == ["a", "b"]  # read once, then kept
-
-    gone = config_from_dict({"output": "wled", "controllers": [{"host": "c"}]})
-    with pytest.raises(ConfigError, match=r"controllers\[0\].*can't connect.*Set controllers\[0\]\.count"):
-        gone.led_count
-
-
 def test_config_local_yaml_wins_over_config_yaml(write_config):
-    write_config("output: sim\n")
-    assert load_config().output == "sim"
+    write_config("shape: tree\n")
+    assert load_config().shape == "tree"
     write_config("shape: flat\n", name="config.local.yaml")
     cfg = load_config()
     assert cfg.shape == "flat" and cfg.source.name == "config.local.yaml"

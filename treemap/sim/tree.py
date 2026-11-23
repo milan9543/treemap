@@ -1,4 +1,5 @@
-"""Seeded random Christmas tree with LED strips: the simulator's ground truth.
+"""Seeded random Christmas tree with LED strips: the virtual WLED's tree, and the
+scan tests' ground truth.
 
 Coordinates are metres: y is up, the trunk runs along the y axis, the floor is y = 0.
 Each strip is wound round the cone as a slightly irregular spiral whose depth zig-zags
@@ -20,14 +21,11 @@ import math
 import secrets
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import numpy as np
 
 from treemap.sim.branches import Branch, grow_branches
-
-if TYPE_CHECKING:
-    from treemap.config import Config
 
 FORMAT_VERSION = 3  # 3 added branches; version 2 files get them grown on load
 MAX_SEED = 2**31 - 1
@@ -40,7 +38,7 @@ JITTER = 0.005  # m, max per-axis random offset of each LED from the wire
 LAYOUTS = ("auto", "interleaved", "stacked")
 STARTS = ("auto", "bottom", "top")
 
-# Accepted ranges for user-supplied specs (also served to the viewer for its form).
+# Accepted ranges for user-supplied specs (the virtual WLED's form for a new tree).
 LIMITS: dict[str, tuple[float, float]] = {
     "strips": (1, 8),
     "leds": (1, 2000),
@@ -99,7 +97,7 @@ class TreeSpec:
 
     @classmethod
     def from_dict(cls, d: Any) -> TreeSpec:
-        """Parse and validate a spec from JSON-like data (e.g. sent by the viewer)."""
+        """Parse and validate a spec from JSON-like data (e.g. from the virtual WLED's page)."""
         if not isinstance(d, dict):
             raise SpecError("spec must be an object")
         unknown = set(d) - {"strips", "height", "radius", "layout", "quirks", "seed"}
@@ -159,19 +157,6 @@ class TreeSpec:
             raise SpecError("quirks must be true or false")
         if self.seed is not None and not 0 <= self.seed <= MAX_SEED:
             raise SpecError(f"seed must be 0-{MAX_SEED}")
-
-
-def spec_from_config(cfg: Config) -> TreeSpec:
-    """The generator spec described by the ``sim`` section of the config."""
-    sim = cfg.sim
-    if sim.strips is None:
-        spec = TreeSpec()
-    else:
-        spec = TreeSpec(strips=[StripSpec(s.leds, s.length, s.start) for s in sim.strips])
-    spec.height, spec.radius, spec.layout = sim.height, sim.radius, sim.layout
-    spec.quirks, spec.seed = sim.quirks, sim.seed
-    spec.validate()
-    return spec
 
 
 @dataclass
@@ -243,7 +228,7 @@ class SimTree:
         if d.get("version") not in (2, FORMAT_VERSION):
             raise ValueError(
                 f"unsupported sim tree format version {d.get('version')!r}; "
-                "regenerate it with `treemap sim new`"
+                "make a new one"
             )
         positions = np.asarray(d["positions"], dtype=np.float64)
         if positions.ndim != 2 or positions.shape[1] != 3:
@@ -272,7 +257,7 @@ class SimTree:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(json.dumps(self.to_dict(), separators=(",", ":")))
-        tmp.replace(path)  # atomic, so the viewer never reads a half-written file
+        tmp.replace(path)  # atomic: never read half-written
 
     @classmethod
     def load(cls, path: str | Path) -> SimTree:

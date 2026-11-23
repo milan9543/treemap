@@ -124,8 +124,8 @@ class EffectContext:
     n: int  # number of LEDs
     fps: float = 40.0  # nominal frame rate, for effects that step per frame
     rng: np.random.Generator = field(default_factory=np.random.default_rng)
-    # Returns the current tree map (or None); usually a treemap.mapping.source.MapSource,
-    # which can switch between the scanned map and the simulator's true tree.
+    # Returns the current tree map (or None); usually a treemap.mapping.model.MapFile,
+    # which reloads the map when a scan changes it.
     tree_map: Callable[[], TreeMap | None] | None = None
 
 
@@ -178,21 +178,16 @@ class Effect:
         }
 
     @classmethod
-    def check_params(cls, values: dict[str, Any], n: int, lenient: bool = False) -> dict[str, Any]:
+    def check_params(cls, values: dict[str, Any], n: int) -> dict[str, Any]:
         """Every parameter's value as JSON (``values`` checked, defaults for the rest),
-        without starting the effect. Raises ParamError, or with ``lenient`` drops the
-        values that aren't valid (settings kept by an older version)."""
+        without starting the effect. Raises ParamError."""
         by_name = {p.name: p for p in cls.params}
         out = {p.name: p.to_json(p.default) for p in cls.params}
         for key, value in values.items():
-            try:
-                if key not in by_name:
-                    raise ParamError(f"{cls.name} has no parameter {key!r} "
-                                     f"(parameters: {', '.join(by_name) or 'none'})")
-                out[key] = by_name[key].to_json(by_name[key].parse(value, n))
-            except ParamError:
-                if not lenient:
-                    raise
+            if key not in by_name:
+                raise ParamError(f"{cls.name} has no parameter {key!r} "
+                                 f"(parameters: {', '.join(by_name) or 'none'})")
+            out[key] = by_name[key].to_json(by_name[key].parse(value, n))
         return out
 
     # -- helpers for subclasses -------------------------------------------------------
@@ -212,9 +207,7 @@ class MapEffect(Effect):
 
     def setup(self) -> None:
         if self.tree_map() is None:
-            load = self.ctx.tree_map
-            missing = getattr(load, "missing", None)
-            raise ParamError(missing() if missing else "no tree map yet: scan the tree first")
+            raise ParamError("no map yet: scan first")
 
     def tree_map(self) -> TreeMap | None:
         """The current map (reloaded if it changed on disk), if it fits these LEDs."""

@@ -1,4 +1,4 @@
-"""The simulated tree's branches, for the viewer to cover in needles.
+"""The simulated tree's branches, for the virtual WLED's screen to cover in needles.
 
 A fir grows in whorls: every 7-12 cm up the trunk a ring of 4-8 main branches. Low
 branches stick out nearly level and sag in the middle; higher ones point more upwards.

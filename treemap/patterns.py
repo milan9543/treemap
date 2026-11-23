@@ -1,15 +1,10 @@
-"""Simple test patterns for checking wiring and index order (``treemap test ...``)."""
+"""Colours and simple test patterns, for the wiring check (``POST /leds``)."""
 
 from __future__ import annotations
 
-import contextlib
-import threading
-import time
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Iterable
 
 import numpy as np
-
-from treemap.outputs.base import LedOutput
 
 RGB = tuple[int, int, int]
 
@@ -49,12 +44,6 @@ def black(n: int) -> np.ndarray:
     return np.zeros((n, 3), dtype=np.uint8)
 
 
-def single(n: int, index: int, rgb: RGB) -> np.ndarray:
-    frame = black(n)
-    frame[index] = rgb
-    return frame
-
-
 def chase_frames(n: int, rgb: RGB, width: int = 1) -> Iterable[tuple[int, np.ndarray]]:
     """Yield ``(head_index, frame)`` with a block of ``width`` LEDs running 0 → n-1.
 
@@ -68,61 +57,3 @@ def chase_frames(n: int, rgb: RGB, width: int = 1) -> Iterable[tuple[int, np.nda
             if head - k >= 0:
                 frame[head - k] = (color * level).astype(np.uint8)
         yield head, frame
-
-
-def play(
-    output: LedOutput,
-    frames: Iterable[tuple[int, np.ndarray]],
-    fps: float,
-    on_frame: Callable[[int], None] | None = None,
-) -> None:
-    """Show frames at a steady rate (drift-free: sleeps to absolute deadlines)."""
-    period = 1.0 / fps
-    deadline = time.perf_counter()
-    for i, frame in frames:
-        output.show(frame)
-        if on_frame:
-            on_frame(i)
-        deadline += period
-        delay = deadline - time.perf_counter()
-        if delay > 0:
-            time.sleep(delay)
-        else:
-            deadline = time.perf_counter()  # fell behind; don't try to catch up
-
-
-@contextlib.contextmanager
-def showing(output: LedOutput, frame: np.ndarray, refresh_s: float = 1.0) -> Iterator[None]:
-    """Keep ``frame`` on the LEDs in the background (e.g. while waiting for input)."""
-    stop = threading.Event()
-
-    def run() -> None:
-        while True:
-            output.show(frame)
-            if stop.wait(refresh_s):
-                return
-
-    thread = threading.Thread(target=run, name="showing", daemon=True)
-    thread.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        thread.join()
-
-
-def hold(
-    output: LedOutput, frame: np.ndarray, seconds: float | None = None, refresh_s: float = 1.0
-) -> None:
-    """Keep showing ``frame`` until ``seconds`` pass (forever if None).
-
-    The frame is re-sent every ``refresh_s`` because WLED drops back to its own effect a
-    few seconds after realtime data stops arriving.
-    """
-    end = None if seconds is None else time.monotonic() + seconds
-    while True:
-        output.show(frame)
-        now = time.monotonic()
-        if end is not None and now >= end:
-            return
-        time.sleep(refresh_s if end is None else min(refresh_s, end - now))

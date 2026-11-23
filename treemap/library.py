@@ -16,7 +16,7 @@ and starts again at the end (in a new order each time when shuffled)::
 Deleting a favourite takes it out of every playlist too.
 
 The file is read on every call and written whole (to a temporary file, then renamed), so
-the viewer's server and ``treemap serve`` can share it: each sees the other's changes.
+a half-written file is never read.
 """
 
 from __future__ import annotations
@@ -99,39 +99,6 @@ class Library:
                 pl["items"] = [i for i in pl["items"] if i["favourite"] != fav_id]
             self._write(data)
 
-    def import_favourites(self, items: Any) -> dict[str, int]:
-        """Add favourites kept somewhere else (the viewer kept them in the browser),
-        skipping those already here (same id, or the same effect and settings) and those
-        for effects this server doesn't have. Settings no longer valid get defaults."""
-        if not isinstance(items, list):
-            raise LibraryError("send a list of favourites")
-        added = skipped = 0
-        with self._lock:
-            data = self._read()
-            favs = data["favourites"]
-            for item in items:
-                try:
-                    if not isinstance(item, dict) or len(favs) >= MAX_FAVOURITES:
-                        raise LibraryError
-                    effect, params = self._effect_params(item.get("effect"),
-                                                         item.get("params") or {}, lenient=True)
-                    if any(f["id"] == item.get("id") or (f["effect"], f["params"]) == (effect, params)
-                           for f in favs):
-                        raise LibraryError
-                    keep = item.get("id")
-                    keep = keep if isinstance(keep, str) and ID.fullmatch(keep) else None
-                    favs.append({"id": _new_id(keep, favs),
-                                 "name": _name(item.get("name"), default=get_effect(effect).label),
-                                 "effect": effect, "params": params})
-                    added += 1
-                except LibraryError:
-                    skipped += 1
-            if added:
-                self._write(data)
-        return {"added": added, "skipped": skipped}
-
-    # -- playlists --------------------------------------------------------------------
-
     def playlists(self) -> list[dict[str, Any]]:
         return self._read()["playlists"]
 
@@ -167,13 +134,13 @@ class Library:
 
     # -- checks -----------------------------------------------------------------------
 
-    def _effect_params(self, effect: Any, params: Any, lenient: bool = False) -> tuple[str, dict]:
+    def _effect_params(self, effect: Any, params: Any) -> tuple[str, dict]:
         if not isinstance(effect, str):
             raise LibraryError("effect must be an effect's name")
         if not isinstance(params, dict):
             raise LibraryError("params must be an object")
         try:
-            return effect, get_effect(effect).check_params(params, self._n(), lenient=lenient)
+            return effect, get_effect(effect).check_params(params, self._n())
         except KeyError as e:
             raise LibraryError(e.args[0]) from None
         except ParamError as e:

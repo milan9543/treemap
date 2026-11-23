@@ -43,7 +43,7 @@ CONTENT_TYPES = {
 NOT_BUILT = b"""<!doctype html><meta charset="utf-8"><title>treemap server</title>
 <body style="font: 15px system-ui; background: #07090d; color: #d8dee9; padding: 2em">
 <h1>The server's page isn't built yet</h1>
-<p>Run <code>npm --prefix viewer install && npm --prefix viewer run build</code> in the
+<p>Run <code>npm --prefix web install && npm --prefix web run build</code> in the
 project folder, then reload this page. The API works without it.</p>"""
 
 

@@ -58,11 +58,9 @@ def test_every_effect_accepts_its_own_described_values(name):
 
 def test_descriptions_are_complete():
     desc = describe_effects(N)
-    assert {"solid", "rainbow", "twinkle", "chase", "markers", "led"} <= {d["name"] for d in desc}
+    assert {"solid", "rainbow", "twinkle", "plane"} <= {d["name"] for d in desc}
     for d in desc:
-        assert d["label"] and d["description"] and d["group"]
-    led = next(d for d in desc if d["name"] == "led")
-    assert led["params"][0]["max"] == N - 1
+        assert d["label"] and d["description"] and d["group"] in ("Classic", "3D")
 
 
 def test_param_parsing():
@@ -113,25 +111,8 @@ def test_unknown_effect():
         create_effect("disco", ctx())
 
 
-def test_solid_and_markers():
+def test_solid():
     assert (create_effect("solid", ctx(), {"color": "blue"}).render(0) == (0, 0, 255)).all()
-    f = create_effect("markers", ctx()).render(0)
-    assert tuple(f[0]) == (0, 80, 255) and tuple(f[100]) == (0, 255, 0)
-    assert tuple(f[50]) == (255, 0, 0) and tuple(f[10]) == (60, 60, 60) and not f[11].any()
-
-
-def test_single_led_with_and_without_neighbours():
-    e = create_effect("led", ctx(), {"index": 5, "color": "red"})
-    f = e.render(0)
-    assert tuple(f[5]) == (255, 0, 0) and f[4, 0] == f[6, 0] == pytest.approx(25.5)
-    e.set_params({"neighbours": False})
-    assert np.count_nonzero(e.render(0).any(axis=1)) == 1
-
-
-def test_chase_moves_forward():
-    e = create_effect("chase", ctx(), {"speed": 10, "width": 1})
-    heads = [int(np.argmax(e.render(t).max(axis=1))) for t in (0, 0.5, 1.0)]
-    assert heads == [0, 5, 10]
 
 
 def test_wipe_fills_then_empties():

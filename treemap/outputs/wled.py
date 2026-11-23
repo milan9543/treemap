@@ -1,6 +1,6 @@
 """``WledOutput``: frames to WLED controllers over DDP (UDP port 4048).
 
-Each controller owns a slice of the global LED index (``controllers`` in the config)
+Each controller owns a slice of the frame's LEDs (a device on ``treemap serve`` is one)
 and gets it as its own LEDs 0, 1, ..., reversed if ``reverse`` is set.
 
 WLED shows realtime data while it keeps arriving and drops back to its own effect when
@@ -27,11 +27,10 @@ import socket
 import struct
 import threading
 import time
-from typing import Any
+from dataclasses import dataclass
 
 import numpy as np
 
-from treemap.config import Controller
 from treemap.outputs.base import LedOutput, OutputError
 
 log = logging.getLogger(__name__)
@@ -42,6 +41,17 @@ FLAG_VERSION_1 = 0x40
 FLAG_PUSH = 0x01
 TYPE_RGB8 = 0x0B
 DEST_DEFAULT = 1
+
+
+@dataclass
+class Controller:
+    """One WLED controller, showing the frame's LEDs ``[start, start + count)`` as its own
+    LEDs 0, 1, ..., reversed if ``reverse`` (a strip wired from the other end)."""
+
+    host: str
+    start: int = 0
+    count: int = 0
+    reverse: bool = False
 
 
 def ddp_packets(rgb: bytes, seq: int) -> list[bytes]:
@@ -130,71 +140,3 @@ class WledOutput(LedOutput):
         if self._thread.is_alive() and self._thread is not threading.current_thread():
             self._thread.join(timeout=2)
         self._sock.close()
-
-
-# -- checking a controller over WLED's JSON API ------------------------------------------
-
-
-def fetch_state(host: str, timeout: float = 3.0) -> dict[str, Any]:
-    """WLED's ``/json`` (``state`` and ``info``). Raises ``OutputError`` if unreachable."""
-    import requests
-
-    try:
-        r = requests.get(f"http://{host}/json", timeout=timeout)
-        r.raise_for_status()
-        data = r.json()
-    except requests.ConnectionError:
-        raise OutputError(f"can't connect to http://{host}/: is the controller on and on "
-                          "this network?") from None
-    except requests.Timeout:
-        raise OutputError(f"http://{host}/ didn't answer within {timeout:g} s") from None
-    except (requests.RequestException, ValueError) as e:
-        raise OutputError(f"no WLED answering at http://{host}/ ({e})") from None
-    if not isinstance(data, dict) or "info" not in data:
-        raise OutputError(f"http://{host}/json isn't WLED's JSON API")
-    return data
-
-
-def fetch_cfg(host: str, timeout: float = 3.0) -> dict[str, Any]:
-    """WLED's settings (``/json/cfg``), or {} if it doesn't answer: they're only checked."""
-    import requests
-
-    try:
-        r = requests.get(f"http://{host}/json/cfg", timeout=timeout)
-        r.raise_for_status()
-        data = r.json()
-    except (requests.RequestException, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def check_problems(c: Controller, data: dict[str, Any], index: int = 0) -> list[str]:
-    """What in WLED's settings doesn't fit controller ``c`` of the config. ``data`` is
-    WLED's ``/json``, with its ``/json/cfg`` under ``"cfg"`` if that was read."""
-    problems = []
-    info, state = data.get("info", {}), data.get("state", {})
-    count = info.get("leds", {}).get("count")
-    if c.count is not None and isinstance(count, int) and count != c.count:
-        if count < c.count:
-            problems.append(
-                f"WLED is set up for {count} LEDs but controllers[{index}].count is {c.count}: "
-                f"LEDs beyond {count} stay dark. Set the LED count in WLED's LED Preferences."
-            )
-        else:
-            problems.append(
-                f"WLED is set up for {count} LEDs but controllers[{index}].count is {c.count}: "
-                f"its LEDs beyond {c.count} won't get treemap's colours."
-            )
-    bri = state.get("bri")
-    if isinstance(bri, int) and bri < 255:
-        problems.append(
-            f"WLED's brightness is {bri}/255 and it dims treemap's colours too. Set it to "
-            "full, or tick \"Force max brightness\" in WLED's Sync Interfaces settings "
-            "(treemap has its own brightness, engine.brightness)."
-        )
-    if data.get("cfg", {}).get("wifi", {}).get("sleep") is True:
-        problems.append(
-            "WiFi sleep is on, which delays packets and makes effects stutter. Tick "
-            "\"Disable WiFi sleep\" in WLED's WiFi Settings."
-        )
-    return problems

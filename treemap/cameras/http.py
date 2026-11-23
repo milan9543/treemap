@@ -1,12 +1,12 @@
 """``HttpCamera``: frames the phone's page uploads to ``treemap serve``.
 
 The page films the LEDs, encodes JPEGs in a worker and POSTs them about four times a
-second to ``/api/v1/scan/frames`` (see :mod:`treemap.api`), which hands each batch to
+second to ``/api/v2/devices/<id>/scan/frames`` (see :mod:`treemap.api`), which hands each batch to
 :meth:`HttpCamera.push`. The scan reads them through the ordinary ``Camera`` interface.
 
-A batch is frames back to back, each a 4-byte little-endian length followed by exactly
-what :func:`treemap.cameras.browser.pack_frame` makes (header length, JSON header with
-``t`` in seconds on the phone's clock, JPEG). Frames are decoded only when read, so a
+A batch is frames back to back, each a 4-byte little-endian length followed by what
+:func:`pack_frame` makes: a 4-byte little-endian header length, the header as UTF-8 JSON
+(``t`` in seconds on the phone's clock), then the JPEG. Frames are decoded only when read, so a
 batch is accepted quickly even while the scan is busy.
 """
 
@@ -19,13 +19,29 @@ import struct
 import threading
 import time
 
+import cv2
+import numpy as np
+
 from treemap.cameras.base import Camera, Frame
-from treemap.cameras.browser import pack_frame, unpack_frame
 
 log = logging.getLogger(__name__)
 
 QUEUE = 48  # frames kept while the scan is busy; older ones are dropped
 MAX_FRAME = 4 * 2**20  # bytes; a 720p JPEG is about 100 KB
+
+
+def pack_frame(header: dict, jpeg: bytes) -> bytes:
+    h = json.dumps(header).encode()
+    return struct.pack("<I", len(h)) + h + jpeg
+
+
+def unpack_frame(data: bytes) -> Frame:
+    (n,) = struct.unpack_from("<I", data)
+    header = json.loads(data[4:4 + n])
+    img = cv2.imdecode(np.frombuffer(data, np.uint8, offset=4 + n), cv2.IMREAD_COLOR)
+    if img is None:
+        raise ValueError("frame isn't a decodable image")
+    return Frame(float(header.pop("t")), img, header)
 
 
 class BatchError(ValueError):

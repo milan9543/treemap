@@ -4,9 +4,8 @@ import struct
 import numpy as np
 import pytest
 
-from treemap.config import Controller
 from treemap.outputs import OutputError
-from treemap.outputs.wled import WledOutput, check_problems, ddp_packets
+from treemap.outputs.wled import Controller, WledOutput, ddp_packets
 
 
 def header(packet: bytes) -> tuple[int, int, int, int, int, int]:
@@ -52,13 +51,3 @@ def test_frames_are_split_across_controllers_and_kept_alive(receiver):
 def test_unknown_host_is_a_clear_error():
     with pytest.raises(OutputError, match="can't find the WLED controller 'no-such-wled.invalid'"):
         WledOutput(10, [Controller("no-such-wled.invalid", 0, 10)])
-
-
-def test_check_flags_led_count_and_dimmed_brightness():
-    c = Controller("wled.local", 0, 200)
-    good = {"info": {"leds": {"count": 200}}, "state": {"bri": 255}}
-    assert check_problems(c, good) == []
-    bad = {"info": {"leds": {"count": 150}}, "state": {"bri": 128}}
-    problems = check_problems(c, {**bad, "cfg": {"wifi": {"sleep": True}}})
-    assert "set up for 150 LEDs" in problems[0] and "128/255" in problems[1]
-    assert "Disable WiFi sleep" in problems[2]

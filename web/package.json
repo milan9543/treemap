@@ -1,5 +1,5 @@
 {
-  "name": "treemap-viewer",
+  "name": "treemap-web",
   "private": true,
   "type": "module",
   "scripts": {

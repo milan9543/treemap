@@ -1,88 +1,46 @@
-# treemap configuration. Every key is optional; missing keys use the defaults shown here.
-# Relative paths are resolved against the directory containing this file.
+# treemap configuration, for `treemap serve`. Every key is optional; missing keys use the
+# defaults shown here. Put your own settings in config.local.yaml next to this file (git
+# ignores it): it's read instead of this one when it exists. Relative paths are resolved
+# against the directory containing the file.
+#
+# There are no LED controllers here: add them on the server's page. Each one's LED count
+# is read from its WLED.
 
-# The number of LEDs isn't set here: in the simulator it's the simulated tree's (generate
-# one in the viewer's Tree step or from sim.strips below), on the real tree it's where the
-# last controller's LEDs end.
-
-# What the LEDs are on: "tree" (wound round a tree, mapped in 3D) or "flat" (laid on the
-# floor or taped to a wall, mapped in 2D; "up" is up in the phone's picture).
+# The shape a device's map has until a scan says otherwise (the scan page picks it for
+# each scan): "tree" (wound round a tree, mapped in 3D) or "flat" (laid on the floor or
+# taped to a wall, mapped in 2D).
 shape: tree
 
-# Where colours go: "sim" (browser viewer) or "wled" (DDP over UDP to the controllers below).
-# `output` and `controllers` are for the commands that drive one tree (`treemap scan`,
-# `treemap run`, ...). `treemap serve` doesn't use them: add controllers on its page.
-output: sim
-
-# WLED controllers, in the order their LEDs are numbered. host is the controller's name
-# or IP address; use the IP if the .local name doesn't resolve. That's all each one
-# needs: its LED count is read from WLED (set it in WLED's LED Preferences), and its
-# LEDs follow on from the previous controller's. Optional overrides: count (LEDs it
-# drives), start (its first LED's global index) and reverse (strand wired from the
-# other end). Between them they cover every LED from 0, without gaps.
-# `treemap wled check` checks each one's WLED settings.
-controllers:
-  - host: wled-tree.local
-# Two-controller example (the second one wired from the far end):
-#  - host: 192.168.1.51
-#  - {host: 192.168.1.52, reverse: true}
-
-# Where the scan's video comes from: "sim" (the viewer's virtual phone: walk round the
-# tree with WASD and the mouse) or "android" (the IP Webcam app's stream, at the address
-# it shows on the phone's screen). `treemap camera check` checks it can scan.
-camera:
-  type: sim
-  url: null            # e.g. http://192.168.1.60:8080 for android
-  fov_deg: 65          # horizontal field of view; a starting guess the solve refines
-
-# Scanning: every LED flashes its own colour code while you walk round the tree. Each
-# round flashes for round_s, solves, then shows the result on the tree for status_s
-# (green ok, yellow interpolated, red failed) before the next round.
+# Scanning: every LED flashes its own colour code while you walk round the tree with the
+# phone. Each round flashes for round_s, solves, then shows the result on the LEDs (green
+# ok, yellow interpolated, red failed) until you start the next round on the phone.
 scan:
-  profile: default     # rounds are stored in data/scans/<profile>/
+  profile: default     # each device's rounds are kept in data/devices/<id>/scans/<profile>/
   symbol_ms: 150       # how long each colour of the code shows
-  brightness: 160      # 0-255 while flashing; lower stops a real camera clipping colours
+  brightness: 160      # 0-255 while flashing; lower stops the camera clipping colours
   round_s: 12          # seconds of flashing per round
-  status_s: 4          # seconds of status colours between rounds
+  status_s: 4          # seconds a round's result shows, when the scan doesn't wait for
+                       # you to start the next round on the phone
   max_rounds: 10       # stop after this many rounds (or once every LED is ok)
-  camera_fps: 24       # photos per second the viewer's virtual phone sends
   countdown_s: 5       # seconds to point the camera at the LEDs before a scan starts
+  fov_deg: 65          # the phone camera's horizontal field of view; a starting guess the
+                       # solve refines
 
-# Effects engine (treemap run, and the viewer's Effects panel).
+# Effects engine: one per device.
 engine:
   fps: 40              # frames per second sent to the LEDs
   brightness: 0.8      # 0-1, scales every effect; also limits power draw
   crossfade: 0.6       # seconds to blend when switching effects
-  gamma: null          # null = 1 in the simulator, 2.2 on WLED (LEDs are linear: without it,
-                       # fades look too bright). Lower it if dim colours look too dark.
+  gamma: null          # null = 2.2 (LEDs are linear: without it, fades look too bright;
+                       # the virtual WLED, a screen, gets 1). Lower it if dim colours look
+                       # too dark.
 
-# `treemap serve`: the API the phone's scan page uses, on the local network.
+# The server: its page, and the API the phone's scan page uses, on the local network.
 server:
   host: 0.0.0.0        # every network interface, so the phone can reach it
-  port: 8765           # with output: sim, use another port than sim.port
+  port: 8765
   origins:             # web pages allowed to use it from a browser; "*" allows any
     - https://treemap-scan.pages.dev   # the scan page
     - https://treemap-spike.pages.dev
     - http://localhost:5173            # the scan page in development (scanapp/)
   scan_page: https://treemap-scan.pages.dev  # what the server's QR codes open on the phone
-
-# The simulated tree (also editable in the viewer's Tree panel). null = random.
-sim:
-  seed: null           # null = random tree each time
-  # LED strips in index order, for `treemap sim new` and the viewer's Tree form defaults.
-  #   length: metres of strip; LED spacing = length / leds (null = random 6.5-8 cm)
-  #   start:  where index 0 is: bottom | top | auto (auto = sometimes top, if quirks)
-  strips:
-    - {leds: 200, length: null, start: auto}
-    - {leds: 200, length: null, start: auto}
-  height: null         # metres; null = random 1.5-2.2
-  radius: null         # metres at the base; null = random 0.5-0.8
-  layout: auto         # interleaved (strips wound side by side, sharing the gaps between
-                       # turns) | stacked (each strip carries on where the last one ended)
-                       # | auto (auto = sometimes stacked, if quirks)
-  quirks: true         # let "auto" settings pick wiring quirks at random
-  hidden_leds: null    # LEDs the virtual phone never sees, e.g. "57, 120-127", to try out
-                       # show-mapping and fix on bad LEDs
-  tree_file: data/sim_tree.json
-  host: 127.0.0.1
-  port: 8765

@@ -1,12 +1,12 @@
-"""How one camera sees the scan code's colours, measured by ``treemap camera check``.
+"""How one phone's camera sees the scan code's colours, measured before each scan.
 
 A phone films small, bright LEDs with washed-out colours: JPEG keeps colour at half
 resolution, so a tiny green dot arrives as something like (83, 125, 95), and green
 light also reaches the sensor's blue and red pixels. Fixed thresholds (the default
-:func:`treemap.scan.track.classify`, which suits the simulator's pure colours) then read
+:func:`treemap.scan.track.classify`, which suits pure colours) then read
 many coloured LEDs as white.
 
-So ``camera check`` shows each colour on every LED, measures each one's **chromaticity**
+So the scan first shows each colour on every LED (:func:`treemap.cameras.check.colour_check`), measures each one's **chromaticity**
 (colour without brightness: ``(r, g, b) / (r + g + b)``) as this camera sees it, and the
 scan reads every blob as the nearest measured colour. A blob about as near to two
 colours as to one is left unread (-1), which the code's check digit and the votes over

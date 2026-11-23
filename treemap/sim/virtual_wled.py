@@ -11,7 +11,7 @@ page, server, DDP, LEDs, camera.
 Network:
     UDP ``ddp_port`` (4048, as WLED)  DDP frames, assembled and shown on each push flag
     HTTP, one port:
-        /             the page (viewer/wled.html, built into treemap/sim/viewer_dist)
+        /             the page (web/wled.html, built into treemap/web_dist)
         /assets/*     its scripts and styles
         /json, /json/info, /json/state, /json/cfg
                       the parts of WLED's JSON API that treemap reads
@@ -44,10 +44,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from websockets.asyncio.server import ServerConnection, broadcast, serve
+from websockets.datastructures import Headers
 from websockets.http11 import Request, Response
 
 from treemap.sim.flat import FlatSpec, SimFlat, generate_flat
-from treemap.sim.server import CONTENT_TYPES, _response, viewer_dir
+from treemap.pages import CONTENT_TYPES, pages_dir
 from treemap.sim.tree import SimTree, SpecError, TreeSpec, generate_tree
 
 log = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ SHAPES = ("tree", "flat")
 NOT_BUILT = b"""<!doctype html><meta charset="utf-8"><title>virtual WLED</title>
 <body style="font: 15px system-ui; background: #07090d; color: #d8dee9; padding: 2em">
 <h1>The page isn't built yet</h1>
-<p>Run <code>npm --prefix viewer install && npm --prefix viewer run build</code> in the
+<p>Run <code>npm --prefix web install && npm --prefix web run build</code> in the
 project folder, then reload this page.</p>"""
 
 
@@ -190,12 +191,12 @@ class VirtualWled:
             return None
         path = urlsplit(request.path).path.rstrip("/") or "/"
         if path in ("/", "/index.html"):
-            page = viewer_dir().joinpath("wled.html")
+            page = pages_dir().joinpath("wled.html")
             html = page.read_bytes() if page.is_file() else NOT_BUILT
             return _response(HTTPStatus.OK, html, "text/html; charset=utf-8")
         if path.startswith("/assets/"):
             name = path.removeprefix("/assets/")
-            asset = viewer_dir().joinpath("assets", name)
+            asset = pages_dir().joinpath("assets", name)
             if re.fullmatch(r"[\w.-]+", name) and asset.is_file():
                 kind = CONTENT_TYPES.get(Path(name).suffix, "application/octet-stream")
                 return _response(HTTPStatus.OK, asset.read_bytes(), kind)
@@ -313,3 +314,12 @@ class VirtualWled:
                 ticker.cancel()
                 assert self._sock is not None
                 self._sock.close()
+
+
+def _response(status: HTTPStatus, body: bytes, content_type: str) -> Response:
+    headers = Headers()
+    headers["Content-Type"] = content_type
+    headers["Content-Length"] = str(len(body))
+    headers["Cache-Control"] = "no-store"
+    headers["Connection"] = "close"
+    return Response(status.value, status.phrase, headers, body)

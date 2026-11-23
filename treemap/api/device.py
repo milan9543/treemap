@@ -87,8 +87,7 @@ from treemap.effects import EffectContext, ParamError
 from treemap.engine import Engine
 from treemap.jobs import JobRejected, Jobs
 from treemap.library import Library
-from treemap.mapping.model import TreeMap
-from treemap.mapping.source import MapSource
+from treemap.mapping.model import MapFile, TreeMap
 from treemap.outputs.base import LedOutput
 from treemap.player import Player
 
@@ -153,7 +152,7 @@ class DeviceApi:
         shared = lambda: SharedOutput(output)  # noqa: E731
         fps = cfg.engine.fps
         self.engine = Engine(
-            shared, EffectContext(n=self.n, fps=fps, tree_map=MapSource(cfg.map_path)),
+            shared, EffectContext(n=self.n, fps=fps, tree_map=MapFile(cfg.map_path)),
             fps=fps, brightness=cfg.engine.brightness, crossfade_s=cfg.engine.crossfade,
             gamma=cfg.gamma,
         )

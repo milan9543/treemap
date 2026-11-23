@@ -1,8 +1,8 @@
-"""A tiny headless stand-in for the browser's phone camera, for tests.
+"""A tiny headless stand-in for the phone's camera, for tests.
 
 Renders the simulated tree's LEDs as coloured dots, seen from a camera walking round
 the tree, while the LEDs show the scan code. LEDs on the far side of the trunk are
-hidden, like the foliage does in the viewer.
+hidden, as the foliage hides them on the virtual WLED's screen.
 """
 
 from __future__ import annotations

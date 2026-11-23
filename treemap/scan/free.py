@@ -42,7 +42,7 @@ from treemap.scan.track import Decoded, Tracker, decode
 
 FRAME_STRIDE = 1_000_000  # frame ids: round * FRAME_STRIDE + frame in round
 OVERRIDES_FILE = "overrides.json"
-UPDATE_S = 0.25  # how often progress and detections are reported while flashing
+UPDATE_S = 0.25  # how often progress is reported while flashing
 
 
 class ScanError(RuntimeError):
@@ -90,7 +90,7 @@ def clear_rounds(scan_dir: Path) -> None:
 
 
 def load_overrides(scan_dir: Path) -> set[int]:
-    """LEDs marked (with ``treemap fix``) to be interpolated instead of measured."""
+    """LEDs marked (on the scan page's Review screen) to be interpolated instead of measured."""
     path = scan_dir / OVERRIDES_FILE
     if not path.exists():
         return set()
@@ -267,19 +267,6 @@ class ScanSettings:
     shape: str = "tree"  # tree: 3D solve; flat: 2D (see build_map)
 
 
-def detections(tracker: Tracker, decoded: Decoded | None) -> dict:
-    """The latest frame's blobs for the phone inset: ``[u, v, led or -1]``."""
-    if not tracker.last or tracker.size is None:
-        return {"size": [0, 0], "blobs": []}
-    uv, ids = tracker.last
-    known = decoded.led_of_track if decoded else {}
-    return {
-        "size": list(tracker.size),
-        "blobs": [[round(float(u), 1), round(float(v), 1), known.get(t, -1)]
-                  for (u, v), t in zip(uv, ids)],
-    }
-
-
 class CodePlayer:
     """Shows the code on the LEDs, each symbol on time, from a thread of its own: the
     scan's frame processing takes long enough on a real camera's frames to make the
@@ -358,7 +345,6 @@ def scan(
                 if now - last_update >= UPDATE_S:
                     last_update = now
                     decoded = decode(tracker, s.symbol_s, lookup)
-                    camera.show_detections(detections(tracker, decoded))
                     on_update({**base, "phase": "flashing",
                                "remaining": round(start + s.round_s - now, 1),
                                "frames": tracker.frame_count,
@@ -370,7 +356,7 @@ def scan(
         on_update({**base, "phase": "solving", "frames": tracker.frame_count,
                    "identified": identified})
         if tracker.size is None:
-            raise ScanError("no camera frames arrived: is the viewer open and showing the tree?")
+            raise ScanError("no camera frames arrived: is the scan page open and filming?")
         f, led, uv = decoded.observations(tracker)
         message = ""
         if len(f):

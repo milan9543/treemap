@@ -1,4 +1,4 @@
-/* Design tokens: every colour, size and radius in the viewer comes from here. */
+/* Design tokens: every colour, size and radius in the pages comes from here. */
 :root {
   --bg: #0b0e13;          /* 3D view */
   --surface: #11151c;     /* top bar, sidebar */

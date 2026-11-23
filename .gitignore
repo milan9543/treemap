@@ -7,16 +7,17 @@ dist/
 build/
 .DS_Store
 
-# generated data: raw scans and simulator ground truth (tree_map.json stays trackable)
+# generated data: raw scans and the phones' measured colours
 data/scans/
+data/camera_colours/
+# left by the 1.x tools, if still around
 data/sim_tree.json
 data/camera_colours.json
-data/camera_colours/
 data/camera_check/
 
-# viewer: npm packages and the built bundle (npm --prefix viewer run build)
+# web pages: npm packages and the built bundle (npm --prefix web run build)
 node_modules/
-treemap/sim/viewer_dist/
+treemap/web_dist/
 
 # phase 1 spike: reports and sample frames from the phone
 spikes/phase1/out/

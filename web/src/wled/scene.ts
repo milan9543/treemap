@@ -1,6 +1,6 @@
 // The virtual WLED's screen: the layout as a phone would film it in a dark room. A tree
-// stands on its floor with its branches lit by the LEDs (foliage.ts, as the viewer's
-// virtual phone sees it); a flat layout hangs on a dark wall.
+// stands on its floor with its branches lit by the LEDs (foliage.ts, as a
+// camera sees it); a flat layout hangs on a dark wall.
 import * as THREE from "three";
 import { LightGrid, LOOKS, treeGeometry, treeMeshes, useGrid } from "../3d/foliage";
 import type { Layout } from "./types";

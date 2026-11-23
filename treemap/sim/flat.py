@@ -10,7 +10,7 @@ Laid by hand, so the path wobbles a little and each LED sits a few millimetres o
 Neighbouring rows (or turns) stay ``gap`` apart, at least twice the LED spacing, so a
 camera can tell them apart.
 
-Coordinates are metres, as for the tree: x across, y up, z towards the viewer. The layout
+Coordinates are metres, as for the tree: x across, y up, z towards the camera. The layout
 stands upright like a picture on a wall, its lowest LED ``BASE`` above the floor.
 """
 

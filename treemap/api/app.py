@@ -28,8 +28,6 @@ GET     /effects                the effects to pick from, with their parameters 
                                 ``needs_map``: it places light by the mapped positions
 GET     /favourites             ``{"favourites": [...]}`` (see :mod:`treemap.library`)
 POST    /favourites             ``{"name", "effect", "params"}``: keep a favourite
-POST    /favourites/import      ``{"favourites": [...]}``: add favourites kept
-                                elsewhere, skipping those already here
 PUT     /favourites/{id}        ``{"name"?, "params"?}``: rename it, or new settings
 DELETE  /favourites/{id}        delete it (and take it out of every playlist)
 GET     /playlists              ``{"playlists": [...]}``
@@ -55,7 +53,7 @@ from typing import Any
 from treemap import __version__
 from treemap.api.device import DeviceApi
 from treemap.api.http import HttpError, Request, Router
-from treemap.config import Config, Controller
+from treemap.config import Config
 from treemap.devices import (
     MAX_DEVICES,
     MAX_LEDS,
@@ -77,17 +75,15 @@ log = logging.getLogger(__name__)
 API_VERSION = 2
 PREFIX = "/api/v2"
 CHECK_S = 5.0  # how often each controller is asked whether it's there
-# Effect groups that aren't light shows: test patterns (POST /leds) and scan views
-NOT_SHOWS = {"Diagnostics", "Mapping"}
 
 # Opens a device's LEDs on its controller; tests swap in a recorder.
 OpenLeds = Callable[[DeviceRecord, Config], LedOutput]
 
 
 def open_wled(record: DeviceRecord, cfg: Config) -> LedOutput:
-    from treemap.outputs.wled import WledOutput
+    from treemap.outputs.wled import Controller, WledOutput
 
-    return WledOutput(cfg.led_count, cfg.controller_layout())
+    return WledOutput(cfg.led_count, [Controller(record.host, 0, cfg.led_count)])
 
 
 class Device:
@@ -138,7 +134,6 @@ class Api:
             ("GET", "/effects", self.effects),
             ("GET", "/favourites", self.favourites),
             ("POST", "/favourites", self.add_favourite),
-            ("POST", "/favourites/import", self.import_favourites),
             ("PUT", "/favourites/{id}", self.put_favourite),
             ("DELETE", "/favourites/{id}", self.delete_favourite),
             ("GET", "/playlists", self.playlists),
@@ -155,9 +150,7 @@ class Api:
     def _device_config(self, record: DeviceRecord) -> Config:
         """The server's config, for this device's LEDs and with its own data folder."""
         cfg = copy.copy(self.cfg)
-        cfg.output = "wled"
-        cfg.controllers = [Controller(host=record.host, start=0, count=record.led_count)]
-        cfg._layout = None
+        cfg.led_count = record.led_count
         cfg.device_dir = self.cfg.resolve("data") / "devices" / record.id
         if record.virtual:
             cfg.engine = copy.copy(cfg.engine)
@@ -314,7 +307,7 @@ class Api:
                 "scan_page": self.cfg.server.scan_page, "devices": len(self.devices)}
 
     def effects(self, req: Request) -> dict[str, Any]:
-        return {"effects": [e for e in describe_effects(MAX_LEDS) if e["group"] not in NOT_SHOWS]}
+        return {"effects": describe_effects(MAX_LEDS)}
 
     def _library(self, change: Callable[[], Any]) -> Any:
         try:
@@ -329,10 +322,6 @@ class Api:
 
     def add_favourite(self, req: Request) -> tuple[int, dict[str, Any]]:
         return 201, self._library(lambda: self.library.add_favourite(req.json()))
-
-    def import_favourites(self, req: Request) -> dict[str, Any]:
-        result = self._library(lambda: self.library.import_favourites(req.json().get("favourites")))
-        return {**result, "favourites": self.library.favourites()}
 
     def put_favourite(self, req: Request) -> dict[str, Any]:
         return self._library(lambda: self.library.update_favourite(req.args["id"], req.json()))

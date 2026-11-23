@@ -11,7 +11,8 @@ import pytest
 from scipy.spatial import cKDTree
 
 from treemap.config import config_from_dict
-from treemap.outputs.wled import WledOutput
+from treemap.devices import probe, wled_led_count
+from treemap.outputs.wled import Controller, WledOutput
 from treemap.sim.flat import FlatSpec, generate_flat
 from treemap.sim.tree import SpecError
 from treemap.sim.virtual_wled import VirtualWled, new_layout
@@ -53,11 +54,10 @@ def device(tmp_path):
 
 def test_serve_drives_it_like_real_wled(device):
     # The LED count comes from its /json/info, with the HTTP port in the host...
-    cfg = config_from_dict({"output": "wled", "controllers": [{"host": f"127.0.0.1:{device.port}"}]})
-    layout = cfg.controller_layout()
-    assert [(c.start, c.count) for c in layout] == [(0, 120)]
+    host = f"127.0.0.1:{device.port}"
+    assert wled_led_count(probe(host)) == 120
     # ...and frames go over DDP to its UDP port, as to a real controller.
-    out = WledOutput(120, layout, port=device.ddp_port)
+    out = WledOutput(120, [Controller(host, 0, 120)], port=device.ddp_port)
     try:
         frame = np.zeros((120, 3), np.uint8)
         frame[7] = [255, 40, 0]
@@ -79,8 +79,8 @@ def test_the_server_adds_it_by_address(device, tmp_path):
 
     cfg = config_from_dict({})
     cfg.base_dir = tmp_path
-    api = Api(cfg, open_leds=lambda r, c: WledOutput(c.led_count, c.controller_layout(),
-                                                      port=device.ddp_port))
+    api = Api(cfg, open_leds=lambda r, c: WledOutput(
+        c.led_count, [Controller(r.host, 0, c.led_count)], port=device.ddp_port))
     server = HttpServer(api.router, "127.0.0.1", 0, []).start()
     root = f"http://127.0.0.1:{server.port}/api/v2"
     try:

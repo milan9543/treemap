@@ -4,8 +4,7 @@ import numpy as np
 import pytest
 
 from treemap.effects import EffectContext, ParamError, create_effect, describe_effects
-from treemap.mapping.model import TreeMap
-from treemap.mapping.source import MapSource
+from treemap.mapping.model import MapFile, TreeMap
 from treemap.sim.tree import TreeSpec, generate_tree
 
 
@@ -53,23 +52,9 @@ def test_candy_spiral_paints_every_led_in_one_of_two_colours():
     assert (red | white).all() and 0.3 < red.mean() < 0.5  # width 0.4 of each period
 
 
-def test_map_source_switches_to_the_normalised_truth(tmp_path):
-    tree = generate_tree(TreeSpec.uniform(50, 1), seed=3)
-    tree.save(tmp_path / "tree.json")
-    source = MapSource(tmp_path / "map.json", tmp_path / "tree.json")
-    assert source.choices == ["scanned", "truth"] and source() is None
-    assert "scan the tree first" in source.missing()
-    source.select("truth")
-    m = source()
-    assert m.led_count == 50 and (m.status == "ok").all()
-    assert m.positions[:, 1].min() == 0 and m.positions[:, 1].max() == pytest.approx(1)
-    with pytest.raises(ValueError):
-        MapSource(tmp_path / "map.json").select("truth")  # no truth outside the simulator
-
-
 def test_3d_effect_without_a_map_says_what_to_do(tmp_path):
-    ctx = EffectContext(n=10, tree_map=MapSource(tmp_path / "map.json", tmp_path / "t.json"))
-    with pytest.raises(ParamError, match="true tree"):
+    ctx = EffectContext(n=10, tree_map=MapFile(tmp_path / "map.json"))
+    with pytest.raises(ParamError, match="scan first"):
         create_effect("rainbow3d", ctx)
 
 
