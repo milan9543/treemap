@@ -16,26 +16,53 @@ tree grows like a fir (whorls of drooping branches covered in needles, the light
 onto them), and its LEDs light up the branches and the floor round them, in the 3D view
 and, more faintly, in the phone's photos.
 
-> **Status:** the simulator, scanning, mapping checks, the effects engine, the WLED
-> output (`output: wled`) and the Android camera (`camera: android`) work. A flat layout
-> (`shape: flat`: strips on the floor) has been scanned on real LEDs; a real tree not
-> yet. See [ROADMAP.md](ROADMAP.md).
+treemap 2.0 ([PLAN-2.0.md](PLAN-2.0.md)) moves this onto a **server** and the **phone**: you
+add your WLED controllers on the server's web page, scan each one from a page on the
+phone, and play effects from the server's page. No IP Webcam app, no config file.
+
+> **Status:** 1.x works: the simulator, scanning, mapping checks, the effects engine,
+> the WLED output and the Android camera (IP Webcam). A flat layout has been scanned on
+> real LEDs; a real tree not yet. From 2.0, phases 1–6b are built: the server with
+> several devices and its page, the scan page (wiring, exposure and colours, rounds,
+> review with front and bottom), effects, favourites and playlists, and a virtual WLED.
+> They're tested on this Mac, not yet with the phone or the real tree. Still to come:
+> Home Assistant (MQTT), Docker and the add-on, the offline scan page. See
+> [PLAN-2.0.md](PLAN-2.0.md).
 
 ## Install
 
 You need [uv](https://docs.astral.sh/uv/), Python 3.11 or newer, and Node.js 20.19+ or
-22.12+ to build the viewer.
+22.12+ to build the web pages.
 
 ```sh
 uv sync
 npm --prefix viewer install
-npm --prefix viewer run build
+npm --prefix viewer run build      # the viewer and the server's page
 uv run treemap --help
 ```
 
-Rebuild the viewer after pulling changes to `viewer/`.
+Rebuild the viewer after pulling changes to `viewer/`. The scan page needs building only
+to work on it (`npm --prefix scanapp install`): the phone uses the hosted copy.
 
 Every command below is run as `uv run treemap …` from the project folder.
+
+## Running each part
+
+| Part | What it is | Run it | Open |
+|---|---|---|---|
+| **The server** | 2.0's server and its page: devices, their LEDs in 3D, effects, favourites, playlists, the QR codes for the scan page. Drives the WLED controllers over DDP. | `treemap serve` | `http://<this computer>:8765/` |
+| **The scan page** | The phone's side of a scan: wiring check, exposure and colours, rounds, review. Hosted on Cloudflare Pages. | nothing: open a device's QR code on the server's page | <https://treemap-scan.pages.dev/> in Chrome on Android |
+| **A virtual WLED** | This computer acting as a WLED controller with a simulated tree or flat layout on screen, to scan with the phone without real LEDs. | `treemap sim wled` | opens by itself; add the `<ip>:8780` it prints on the server's page |
+| **The simulator viewer** | 1.x: a virtual tree in 3D, walked round with a virtual phone; scan, map and effects all on screen. | `treemap sim view` | <http://127.0.0.1:8765/> (opens by itself) |
+| **The command line** | 1.x: scan, fix and run effects on the tree in `config.yaml` (the simulator's, or `output: wled`). | `treemap scan`, `treemap run rainbow`, … ([table](#the-same-from-the-command-line)) | — |
+
+- **Server and virtual WLED together** (scan a screen with the phone): run `treemap sim
+  wled` and `treemap serve` in two terminals, then add the virtual WLED's address on the
+  server's page. See [A virtual WLED](#a-virtual-wled-scan-your-screen).
+- `treemap serve` and `treemap sim view` both default to port 8765: to run both, give
+  one another port (`treemap serve --port 8766`).
+- To work on the pages with hot reload (`npm --prefix viewer run dev`,
+  `npm --prefix scanapp run dev`), see [Development](#development).
 
 ## Quick start: the web viewer
 
@@ -85,8 +112,9 @@ nothing) with a Stop button, and ⚙ opens the configuration and the keyboard sh
    animation isn't lighting. The switch on that card picks their positions:
    the **Scanned map** (what the real tree will use) or, in the simulator, the **True
    tree**. Compare the two to see how much the scan's errors show. The scanned map's
-   "front" is wherever the scan started, so effects that turn round the trunk can start
-   at a different angle on each.
+   "front" is wherever the scan started (the scan page's Review screen can turn it, see
+   [The scan page](#the-scan-page)), so effects that turn round the trunk can start at a
+   different angle on each.
 
    Press ☆ in Now playing to keep the running effect, with its settings, under
    **Favourites**: click one to play it, ✎ to rename it, 🗑 to delete it. If you change
@@ -121,7 +149,8 @@ Keep `treemap sim view` running in one terminal to watch; run these in another.
 | Run an effect | `treemap run rainbow -p speed=0.5 --seconds 30` |
 | Run a 3D effect on the true positions | `treemap run plane -p direction=around --map truth` |
 | Check the WLED controllers' settings | `treemap wled check` |
-| Serve the API for the phone's scan page | `treemap serve` (see [The server](#the-server-treemap-serve)) |
+| Run the 2.0 server and its page | `treemap serve` (see [The server](#the-server-treemap-serve)) |
+| Act as a WLED controller on this screen | `treemap sim wled [--new flat]` (see [A virtual WLED](#a-virtual-wled-scan-your-screen)) |
 | Check the camera can scan (and measure its colours) | `treemap camera check [--brightness 100]` |
 | Show the config | `treemap config show` |
 
@@ -174,7 +203,12 @@ change:
 | `engine.gamma` | Gamma correction of effect frames. `null` = 1 in the simulator (the screen already applies one) and 2.2 on WLED (LEDs are linear). |
 | `sim.strips`, `sim.height`, `sim.radius`, `sim.layout`, `sim.seed` | Defaults for generated trees (`null` = random). |
 | `sim.hidden_leds` | LEDs the virtual phone never sees, e.g. `"57, 120-127"`, to try out fixing bad LEDs. |
-| `server.port`, `server.origins` | `treemap serve`'s port, and the web pages allowed to use it from a browser. |
+| `server.host`, `server.port` | Where `treemap serve` listens: every interface (`0.0.0.0`, so the phone reaches it) on 8765. |
+| `server.origins` | The web pages allowed to use the server's API from a browser (the scan page, and `localhost:5173` for development). |
+| `server.scan_page` | The scan page the device QR codes open; it's allowed too. |
+
+`output` and `controllers` are only for the 1.x commands (`treemap scan`, `treemap run`,
+…). `treemap serve` ignores them: its devices are added on its page.
 
 ## Files
 
@@ -185,7 +219,12 @@ change:
 | `data/scans/<profile>/overrides.json` | LEDs you asked to interpolate. |
 | `data/camera_colours.json` | How the camera sees each colour of the code, from `treemap camera check`. |
 | `data/camera_check/*.jpg` | One frame of each colour from the last `treemap camera check`. |
-| `data/tree_map.json` | The result: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. |
+| `data/tree_map.json` | The result: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. The map can also hold an `orientation` (the front, or a flat map's turn and mirror), set on the scan page's Review screen. |
+| `data/devices.json` | `treemap serve`'s devices: name, address, LED count. |
+| `data/devices/<id>/` | One device's map (`tree_map.json`) and its last scan's rounds (`scans/`). Only the current map: a new scan replaces it. |
+| `data/library.json` | Favourites and playlists, shared by every device and by the viewer. |
+| `data/camera_colours/<phone>.json` | How each phone (model and camera) sees the code's colours, and its exposure search's counts, from the scan page. |
+| `data/virtual_wled.json` | The virtual WLED's layout. |
 
 ## Real LEDs: WLED
 
@@ -251,8 +290,15 @@ LEDs, map, scans and effects. The first time there are none.
   **playlists** of favourites with times and crossfades. Favourites and playlists are
   shared by all devices (`data/library.json`). Switch **Send to the LEDs** off to
   preview an effect on the page only; a device that's off shows effects there too.
+- **Timing** (under Now playing, while an effect plays): the frames per second sent,
+  the gap between frames, and the time to render and send each one, over the last 2 s.
+  If it reads steady while the LEDs still speed up and slow down, the frames are held
+  up on the Wi-Fi or in the controller, not by the server: on a Mac, AirDrop's
+  background radio (`sudo ifconfig awdl0 down` to test) or WLED's WiFi sleep are the
+  usual causes.
 - A map from before devices (`data/tree_map.json`) can be taken over by a device with
   the same LED count, from its page.
+- One device is one controller: a tree split over two controllers isn't covered yet.
 
 The API is under `/api/v2` (see [treemap/api/app.py](treemap/api/app.py) and
 [treemap/api/device.py](treemap/api/device.py)). The server's own endpoints are
@@ -277,16 +323,39 @@ your local network when Chrome asks. Then:
    in order, fix the LED settings in WLED. You can also light one LED by number.
 3. **Scan:** the page films with the rear camera (it picks the main lens, the one with
    continuous focus) and uploads the frames while the server runs the rounds. The page
-   shows each round's progress and result; **Stop** keeps the rounds already finished.
-4. **Review:** fix missing LEDs and set which way the map faces.
+   shows each round's progress and result. After each round the LEDs show it (green,
+   yellow, red) until you tap **Start round N** where it's red, or **Finish here**;
+   **Stop** keeps the rounds already finished.
+4. **Review:** fix missing LEDs and set which way the map faces (below).
 
-Each scan first sets the phone up. While the LEDs glow white, the page tries exposures
-from shortest to longest, and the server counts the LEDs in each. The page keeps the
-shortest exposure that shows nearly all of them and locks the white balance. Phones
-without manual exposure let automatic exposure settle, then lock it. Next, the server
-shows red, green, blue and white in turn and measures how this phone sees each colour.
-It keeps the result per phone (model and camera) in `data/camera_colours/`, and the page
-shows the share of each colour read right (85% passes).
+Each scan first sets the phone up:
+
+- **Exposure.** The LEDs show the code's colours along the strip while the page tries
+  exposures, darkest first: 0.5 to 8 ms at ISO 100, then ISO 200 to 1600 at 8 ms, and
+  the server counts the LEDs seen in each. It keeps the darkest that sees at least 95%
+  as many as the best. An exposure that sees more spots than there are LEDs, or lights
+  over 15% of the picture, is too bright and never picked. A strip of the exposures
+  tried, each with a bar of the LEDs it saw, lets you tap another; **Continue** goes
+  on. The start screen can reuse the exposure last used with this camera (the phone
+  remembers it) instead of searching.
+  Phones without manual exposure let automatic exposure settle, then lock it. The white
+  balance is locked too.
+- **Colours.** The LEDs show red, green, blue and white in turn and the server measures
+  how this phone sees each colour. It keeps the result per phone (model and camera) in
+  `data/camera_colours/`, and the page shows the share of each colour read right (85%
+  passes).
+
+**Review** (after a scan, or from the connect screen):
+
+- **Fix LEDs:** red and yellow runs are listed; tap one to light it blue on the LEDs, then
+  **scan this part again** (more rounds, added to the scan's) and film it. A misplaced
+  LED can have its readings ignored, so it's placed between its neighbours; a rising
+  plane helps find one.
+- **Front (tree):** a vertical stripe lights at the map's front; drag the slider until it
+  faces the room. **Bottom (flat):** the bottom edge lights white and the left side red;
+  turn it in quarter turns, and mirror it if the strips were filmed from behind.
+  The map keeps its positions and stores the turn alongside them, so every effect
+  follows it and it can be changed later without scanning again.
 
 ### A virtual WLED: scan your screen
 
@@ -325,6 +394,10 @@ Python may accept incoming connections: allow it, or DDP from another machine wo
 arrive.
 
 ## Real camera: an Android phone
+
+This is the 1.x way, for `treemap scan` and the viewer; with `treemap serve` the phone
+uses [the scan page](#the-scan-page) instead. It goes once the scan page has scanned the
+real tree.
 
 The scan films through the [IP Webcam](https://play.google.com/store/apps/details?id=com.pas.webcam)
 app: start its server, and use the address it shows at the bottom of the screen.
@@ -381,7 +454,8 @@ position as the median over the photos. It then works out the angle the phone lo
 at the floor from: the tilt that makes the spacing between neighbouring LEDs as even as
 it is on the strip. The map comes out as seen square-on, with "up" being the top of the
 phone's picture and z = 0, so effects that sweep up, across or out from the middle work;
-those that turn round a tree's trunk don't mean much.
+those that turn round a tree's trunk don't mean much. The scan page's Review screen can
+turn and mirror it so its bottom is where you want it.
 
 The viewer shows a flat map upright, the way the phone saw it. With `output: wled` it
 also mirrors what the LEDs show, so you can watch effects and the scan in the browser.
@@ -446,7 +520,11 @@ The server's page is part of the viewer project (`viewer/server.html`,
 
 `localhost` counts as a secure page, so the camera works there too (on a laptop, its
 webcam). `npm --prefix scanapp run build` writes `scanapp/dist/`, which is what Cloudflare
-Pages serves.
+Pages serves. It's deployed by hand for now:
+
+```sh
+npm --prefix scanapp run build && wrangler pages deploy scanapp/dist --project-name treemap-scan --branch main
+```
 
 The Python code is in `treemap/`; the viewer (Vite + Svelte 5 + TypeScript + three.js) is in
 `viewer/src/` and builds into `treemap/sim/viewer_dist/`. In the viewer, `lib/` holds the
@@ -462,9 +540,13 @@ workflow step.
 | `scan/` | The LED code, blob tracking and decoding, measured camera colours, structure from motion (tree), the flat solve, scan rounds, cleanup and evaluation. |
 | `mapping/` | The tree map file and the quality views. |
 | `effects/` | The effects. |
-| `engine.py` | Runs effects at a fixed frame rate. |
-| `workflow.py` | The scan, reconstruct and fix steps, shared by the CLI and the viewer. |
-| `jobs.py` | Runs those steps in the background for the viewer. |
-| `sim/` | The tree generator and the server. |
+| `engine.py` | Runs effects at a fixed frame rate, and times it. |
+| `workflow.py` | The scan, reconstruct and fix steps, shared by the CLI, the viewer and the server. |
+| `jobs.py` | Runs those steps in the background for the viewer and the server. |
+| `api/` | `treemap serve`'s HTTP API (`/api/v2`): the server's endpoints and each device's. |
+| `devices.py` | The devices `treemap serve` drives, kept in `data/devices.json`. |
+| `library.py`, `player.py` | Favourites and playlists, and what the engine plays (an effect, a favourite or a playlist). |
+| `sim/` | The tree generator, the viewer's server and the virtual WLED. |
 
-[ROADMAP.md](ROADMAP.md) has the plan and what's next.
+[PLAN-2.0.md](PLAN-2.0.md) has the 2.0 plan and what's next; [ROADMAP.md](ROADMAP.md) the
+1.x one.

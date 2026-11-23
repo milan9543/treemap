@@ -163,7 +163,8 @@ library's threaded HTTP server; `HttpCamera` ([treemap/cameras/http.py](treemap/
 controllers with only a host; engine timing. Tested on this Mac, with the simulated LEDs
 and a stand-in phone that uploads rendered frames. Still to check on the real tree:
 2.2 from the phone (`https://treemap-spike.pages.dev/?server=http://<ip>:8765&ping=/api/v1/info`),
-2.3 chase on the LEDs, 2.5 with only the host, 2.5b stutter. Changes from the sketch:
+2.3 chase on the LEDs, 2.5 with only the host, 2.5b stutter (effects speed up and slow
+down on the real LEDs; the timing on the server's page now tells where). Changes from the sketch:
 `POST /play` already runs an effect (Phase 6 added favourites and playlists); a frame
 batch is each frame with a 4-byte length in front; `/scan/state` gives each LED's
 status as one letter (o, i, f).
@@ -188,6 +189,14 @@ status as one letter (o, i, f).
   "Disable WiFi sleep" in `treemap wled check`.
   **Done when:** effects run without visible stutter on 400 LEDs, and the numbers show why
   if they don't.
+  Since 2026-11-23 the timing also has the gap from one frame to the next (`gap_ms`),
+  which shows the server pausing between frames, and the server's page shows it all under
+  Now playing (fps, gaps, render, send, late) with a verdict: can't keep up, paused, or
+  steady. Steady while the LEDs still speed up and slow down means the frames are held
+  up on the Wi-Fi or in the controller: on a Mac, AirDrop's AWDL radio (`sudo ifconfig
+  awdl0 down` to test) or WLED's WiFi sleep. Switching to TCP, as some setups with
+  thousands of LEDs do, wouldn't help: 400 LEDs are one DDP packet a frame, and TCP
+  would hold later frames back behind a lost one.
 - **2.6 Scan sessions over HTTP.** `scan/start`, `scan/stop`, `scan/state`, wired to
   `workflow.py`. Status colours after each round as now.
   **Done when:** the simulator's virtual phone can scan through the HTTP endpoints
