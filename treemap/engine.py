@@ -171,13 +171,15 @@ class Engine:
 
     def timing(self) -> dict[str, Any]:
         """How the last couple of seconds went: frames per second actually sent, the
-        time to render a frame and to send it (median and worst, ms), and how many
-        frames were late. ``slow`` is True when the frame rate falls short."""
+        time to render a frame and to send it, the gap from one frame to the next (each
+        median and worst, ms), and how many frames were late. ``slow`` is True when the
+        frame rate falls short. A worst gap well over the frame period with a good frame
+        rate means the computer paused the engine now and then."""
         now = time.perf_counter()
         recent = [s for s in list(self._samples) if s[0] >= now - TIMING_WINDOW_S]
         if not self.running or len(recent) < 2:
             return {"fps_target": self.fps, "fps": None, "render_ms": None, "send_ms": None,
-                    "late": 0, "slow": False}
+                    "gap_ms": None, "late": 0, "slow": False}
         span = max(recent[-1][0] - recent[0][0], 1e-6)
         fps = (len(recent) - 1) / span
 
@@ -190,6 +192,7 @@ class Engine:
             "fps": round(fps, 1),
             "render_ms": ms([s[1] for s in recent]),
             "send_ms": ms([s[2] for s in recent]),
+            "gap_ms": ms([b[0] - a[0] for a, b in zip(recent, recent[1:])]),
             "late": sum(s[3] for s in recent),
             "slow": span >= TIMING_WINDOW_S * 0.75 and fps < SLOW * self.fps,
         }

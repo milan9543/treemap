@@ -19,6 +19,7 @@
   import { coalesce } from "./coalesce";
   import EffectControls from "./EffectControls.svelte";
   import PlaylistEditor from "./PlaylistEditor.svelte";
+  import Timing from "./Timing.svelte";
 
   let { dev, device, onchange }: { dev: DeviceApi; device: Device; onchange: () => void } = $props();
 
@@ -298,6 +299,7 @@
       <span class="muted">The controller isn't answering: shown here only</span>
     {/if}
   </div>
+  {#if running && device.timing}<Timing t={device.timing} sending={device.send !== false} />{/if}
   {#if error}<Alert tone="bad">{error}</Alert>{/if}
 </Card>
 

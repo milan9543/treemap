@@ -525,7 +525,8 @@ def _timing_line(t: dict) -> str:
         return "starting…"
     line = (f"{t['fps']:.1f}/{t['fps_target']:g} fps, render {t['render_ms']['median']:.1f} ms "
             f"(max {t['render_ms']['max']:.1f}), send {t['send_ms']['median']:.1f} ms "
-            f"(max {t['send_ms']['max']:.1f}), {t['late']} late")
+            f"(max {t['send_ms']['max']:.1f}), gaps up to {t['gap_ms']['max']:.0f} ms, "
+            f"{t['late']} late")
     return typer.style(line + " SLOW", fg=typer.colors.YELLOW) if t["slow"] else line
 
 

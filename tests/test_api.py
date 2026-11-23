@@ -122,6 +122,7 @@ def test_led_commands_and_an_effect(serve):
     info = call(base)[2]
     assert info["busy"] == "effect" and info["effect"] == "rainbow"
     assert info["timing"]["fps"] > 10 and info["timing"]["render_ms"]["median"] < 50
+    assert 0 < info["timing"]["gap_ms"]["median"] <= info["timing"]["gap_ms"]["max"]
     assert out.frame.any()
     call(base + "/leds", {"mode": "off"})  # a test pattern replaces the effect
     assert call(base)[2]["busy"] is None and not out.frame.any()

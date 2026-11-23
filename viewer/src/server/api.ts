@@ -37,7 +37,19 @@ export interface Device {
   effect?: string | null;
   send?: boolean; // frames go to the controller (else to this page only)
   gamma?: number;
+  timing?: Timing; // the effects engine's last 2 s
   error?: string | null; // why the controller's output can't be opened
+}
+
+type Ms = { median: number; max: number };
+export interface Timing {
+  fps_target: number;
+  fps: number | null; // null while nothing plays (then the rest are null too)
+  render_ms: Ms | null;
+  send_ms: Ms | null;
+  gap_ms: Ms | null; // from one frame's start to the next
+  late: number;
+  slow: boolean;
 }
 
 export interface MapInfo {
