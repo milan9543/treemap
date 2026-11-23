@@ -37,6 +37,13 @@ def _color_param(name: str, default: str, **kw) -> Param:
     return Param(name, "color", XMAS[default], group="colours", **kw)
 
 
+def outline(g) -> float:
+    """The tree's outline as a cone: how far out its LEDs reach is about
+    ``slope * (1.03 * top - h)`` at height ``h``. Returns the slope."""
+    top = g.hi[1]
+    return float(np.percentile(g.r[g.valid] / np.maximum(1.03 * top - g.h[g.valid], 0.05), 90))
+
+
 def _sweep(phase: float, bounce: bool) -> float:
     """0-1 position of a sweep after ``phase`` passes: a sawtooth, or a triangle."""
     if bounce:
@@ -428,8 +435,7 @@ class Fireflies(_Effect3D):
         lo, hi = g.lo[1], g.hi[1]
         h = lo + (hi - lo) * (0.5 + 0.42 * np.sin(TAU * self.bob[:n] * st + self.phase[0, :n]))
         # the tree's outline: how far out the LEDs reach at each height
-        cone = np.percentile(g.r[g.valid] / np.maximum(1.03 * hi - g.h[g.valid], 0.05), 90)
-        r = cone * np.maximum(1.03 * hi - h, 0.0) * self.depth[:n] * (
+        r = outline(g) * np.maximum(1.03 * hi - h, 0.0) * self.depth[:n] * (
             0.85 + 0.15 * np.sin(TAU * 0.13 * st + self.phase[1, :n]))
         a = self.theta0[:n] + TAU * self.orbit[:n] * st
         pos = np.stack([r * np.sin(a), h, r * np.cos(a)], axis=1)  # (n, 3); θ = 0 at +z
@@ -441,6 +447,95 @@ class Fireflies(_Effect3D):
         total = glow.sum(axis=0)
         mix = glow.T @ self.colors(np.arange(n)) / np.maximum(total, 1e-6)[:, None]
         return self.over_background(np.clip(total, 0, 1), mix)
+
+
+BAUBLES = 24  # the most baubles
+R2 = (0.7548776662, 0.5698402910)  # a 2D low-discrepancy sequence: spread up and round
+
+
+@register
+class Baubles(_Effect3D):
+    name = "baubles"
+    label = "Christmas baubles"
+    description = "Shiny baubles going round and round the tree, in rings or gliding down a spiral."
+    params = (
+        Param("path", "choice", "rings", choices=("rings", "spiral"),
+              help="rings: each stays at its height; spiral: they glide down as they go "
+                   "round, and start again at the top"),
+        *color_params(XMAS["red"], colors="palette", palette_help="each bauble the next colour"),
+        Param("count", "int", 10, min=1, max=BAUBLES, step=1),
+        Param("size", "float", 0.09, min=0.03, max=0.25, step=0.01,
+              help="radius, fraction of the tree height"),
+        Param("speed", "float", 0.12, min=-1, max=1, step=0.01,
+              help="turns per second round the trunk (negative: the other way)"),
+        Param("shine", "bool", True, help="a white glint on each bauble"),
+        *background_params(),
+    )
+
+    def setup(self) -> None:
+        super().setup()
+        k = np.arange(BAUBLES)
+        self.height = (0.5 + k * R2[0]) % 1  # 0-1, spread up the tree
+        self.theta0 = TAU * ((0.5 + k * R2[1]) % 1)  # and round it, without lining up
+        self.pace = self.rng.uniform(0.85, 1.15, BAUBLES)  # not quite in step
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, n, size = m.geometry, self.p["count"], self.p["size"]
+        lo, hi = g.lo[1], g.hi[1]
+        turns = self.p["speed"] * self.pace[:n] * t
+        frac = self.height[:n]
+        fade = np.ones(n, np.float32)
+        if self.p["path"] == "spiral":  # a tree height every 4 turns, wrapping to the top
+            frac = (frac - np.abs(turns) / 4) % 1.0
+            fade = np.clip(np.minimum(frac, 1 - frac) / 0.08, 0, 1)  # in at the top, out at the bottom
+        h = lo + 0.05 + (hi - lo - 0.1) * frac
+        r = outline(g) * np.maximum(1.03 * hi - h, 0.0) * 0.95
+        a = self.theta0[:n] + TAU * turns
+        pos = np.stack([r * np.sin(a), h, r * np.cos(a)], axis=1)  # (n, 3); θ = 0 at +z
+        out = np.stack([np.sin(a), np.full(n, 0.8), np.cos(a)], axis=1)  # outwards and up
+        glint = pos + 0.45 * size * out / np.linalg.norm(out, axis=1, keepdims=True)
+        colors = self.colors(np.arange(n))
+        white = np.array([255.0, 255, 255], np.float32)
+
+        frame = np.broadcast_to(self.background(), (self.n, 3)).astype(np.float32)
+        for i in np.argsort(r):  # the ones nearer the trunk first, under the others
+            d = np.linalg.norm(g.xyz - pos[i], axis=1) / size  # 0 at the centre, 1 at the edge
+            level = np.clip((1 - d) / 0.3, 0, 1) * fade[i]  # a solid ball, soft at its edge
+            rgb = colors[i] * (0.55 + 0.45 * np.clip(1 - d * d, 0, 1))[:, None]  # shaded
+            if self.p["shine"]:
+                spot = np.exp(-(np.linalg.norm(g.xyz - glint[i], axis=1) / (0.3 * size)) ** 2)
+                rgb = rgb + (white - rgb) * (0.85 * spot)[:, None]
+            frame = frame * (1 - level[:, None]) + level[:, None] * rgb
+        return frame
+
+
+@register
+class Screw(_Effect3D):
+    name = "screw"
+    label = "Screw"
+    description = "Rounded threads winding round the tree like a screw, moving up or down."
+    params = (
+        Param("direction", "choice", "up", choices=("up", "down")),
+        *color_params(XMAS["gold"], "candy cane", colors="palette",
+                      palette_help="each thread the next colour"),
+        Param("speed", "float", 0.15, min=0.01, max=1, step=0.01,
+              help="tree heights per second the threads move"),
+        Param("turns", "float", 3.0, min=0.5, max=10, step=0.1,
+              help="how often a thread winds round the trunk, bottom to top"),
+        Param("threads", "int", 2, min=1, max=6, step=1),
+        Param("thickness", "float", 0.5, min=0.1, max=0.95, step=0.05,
+              help="share of the gap between threads they fill"),
+        *background_params(),
+    )
+
+    def render_map(self, t: float, m: TreeMap) -> np.ndarray:
+        g, k, thick = m.geometry, self.p["threads"], self.p["thickness"]
+        rise = self.p["speed"] * t * (1 if self.p["direction"] == "up" else -1)
+        phase = k * (g.theta / TAU + self.p["turns"] * (g.h - rise))
+        nearest = np.round(phase)  # the centre line of the closest thread
+        across = np.abs(phase - nearest) / thick  # 0 on the centre line, 0.5 at its edge
+        level = np.where(across < 0.5, np.cos(np.pi * across) ** 2, 0.0)  # rounded, like a thread
+        return self.over_background(level, self.colors(nearest.astype(np.int64) % k))
 
 
 @register

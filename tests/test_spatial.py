@@ -145,3 +145,14 @@ def test_fire_is_hot_at_the_bottom_and_dark_at_the_top():
     for t_ in (0.5, 2.0, 7.3):
         light = e.render(t_).sum(axis=1)
         assert light[h < 0.15].mean() > 4 * light[h > 0.8].mean() + 1
+
+
+def test_screw_threads_move_up_or_down():
+    h = np.linspace(0, 1, 201)
+    m = tree_map(np.stack([np.zeros_like(h), h, 0.2 + 0 * h], axis=1))  # a line at the front
+    for direction, moved in (("up", 0.6), ("down", 0.4)):
+        e = create_effect("screw", ctx_for(m), {"direction": direction, "threads": 1,
+                                                "turns": 2, "speed": 0.2})
+        at = lambda y, t_: e.render(t_)[int(round(y * 200))].max()  # noqa: E731
+        assert at(0.5, 0) > 200  # a thread crosses the front at half way
+        assert at(moved, 0.5) > 200 and at(1 - moved, 0.5) < 50  # 0.1 further on after 0.5 s

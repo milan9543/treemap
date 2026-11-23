@@ -77,9 +77,14 @@ LEDs, map, scans and effects. The first time there are none.
   phone, and its LEDs **in 3D** where the scan placed them, lit as they are now. Drag
   to turn, scroll to zoom.
 - **Effects** play on the device: pick one and tune it, keep it as a favourite (☆), make
-  **playlists** of favourites with times and crossfades. Favourites and playlists are
-  shared by all devices (`data/library.json`). Switch **Send to the LEDs** off to
-  preview an effect on the page only; a device that's off shows effects there too.
+  **playlists** of favourites with times and crossfades. Settings many effects share
+  have their own sections: **Colours** (one colour, or a **palette**), **Background**
+  and **Sparkle** (twinkles over almost any effect). Make your own palettes from the
+  palette picker, or copy a built-in one and change it; editing a palette changes
+  every favourite that uses it. Favourites, playlists and palettes are shared by all
+  devices (`data/library.json`). Switch **Send to the LEDs** off to preview an effect
+  on the page only; a device that's off shows effects there too. On a phone the 3D
+  view is a tab of its own.
 - **Timing** (under Now playing, while an effect plays): the frames per second sent,
   the gap between frames, and the time to render and send each one, over the last 2 s.
   If it reads steady while the LEDs still speed up and slow down, the frames are held
@@ -108,7 +113,7 @@ every minute):
 
 The API is under `/api/v2` (see [treemap/api/app.py](treemap/api/app.py) and
 [treemap/api/device.py](treemap/api/device.py)). The server's own endpoints are
-`/info`, `/devices`, `/effects`, `/favourites` and `/playlists`; each device's are under
+`/info`, `/devices`, `/effects`, `/favourites`, `/playlists` and `/palettes`; each device's are under
 `/devices/<id>`: `/leds` (test patterns), `/play`, `/brightness`, `/stop`, `/frame`,
 `/send`, `/scan/*` and `/map`. For example, `curl -X POST -H 'Content-Type:
 application/json' -d '{"mode":"chase"}' http://<server>:8765/api/v2/devices/<id>/leds`
@@ -262,7 +267,7 @@ The earlier command-line version's keys (`output`, `controllers`, `camera`, `sim
 | `data/devices.json` | The server's devices: name, address, LED count. |
 | `data/devices/<id>/tree_map.json` | A device's map: a position and status per LED. Heights run 0 (lowest LED) to 1 (highest); x and z are centred on the trunk at the same scale. It can also hold an `orientation` (the front, or a flat map's turn and mirror), set on the scan page's Review screen or the server's page. Only the current map: a new scan replaces it. |
 | `data/devices/<id>/scans/<profile>/` | The device's last scan's rounds (which LED was at which pixel in each photo), and the LEDs whose readings are ignored (`overrides.json`). |
-| `data/library.json` | Favourites and playlists, shared by every device. |
+| `data/library.json` | Favourites, playlists and your own palettes, shared by every device. |
 | `data/camera_colours/<phone>.json` | How each phone (model and camera) sees the code's colours, and its exposure search's counts, from the scan page. |
 | `data/virtual_wled.json` | The virtual WLED's layout. |
 
@@ -326,7 +331,7 @@ fir tree they draw, and `components/ui/` the small building blocks they share.
 | `mapping/` | The map file and its status colours. |
 | `effects/` | The effects. |
 | `engine.py` | Runs effects at a fixed frame rate, and times it. |
-| `library.py`, `player.py` | Favourites and playlists, and what the engine plays (an effect, a favourite or a playlist). |
+| `library.py`, `player.py` | Favourites, playlists and palettes, and what the engine plays (an effect, a favourite or a playlist). |
 | `workflow.py`, `jobs.py` | The scan, solve-again and ignore-an-LED steps, run in the background for a device. |
 | `sim/` | The tree and flat layout generators, and the virtual WLED. |
 | `pages.py` | Where the built pages are. |
