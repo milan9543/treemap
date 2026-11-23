@@ -117,6 +117,9 @@
       {#if device.error && device.send !== false}
         <Alert tone="warn">Can't send to the controller: {device.error}</Alert>
       {/if}
+      {#each device.status.problems ?? [] as problem (problem)}
+        <Alert tone="warn">{problem} <span class="muted small">(Checked every minute.)</span></Alert>
+      {/each}
       {#if mismatch !== null}
         <Alert tone="warn">WLED now has {mismatch} LEDs; this device was set up with {device.led_count}.
           <Button size="sm" onclick={() => act(() => dev.update({ led_count: mismatch }))}>Use {mismatch} LEDs</Button>

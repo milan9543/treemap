@@ -194,7 +194,8 @@ status as one letter (o, i, f).
 - **2.5b Frame timing.** Measure render time, send time and frames that fell behind;
   show them in `/info` and warn when the engine can't keep its frame rate. Check WLED's
   "Disable WiFi sleep" in `treemap wled check` (gone with the 1.x commands in Phase 6c;
-  not on the server's page yet).
+  since 2026-11-23 the device page warns instead: WiFi sleep, a dimmed WLED brightness
+  and "Receive UDP realtime" off, read when it starts answering and then every minute).
   **Done when:** effects run without visible stutter on 400 LEDs, and the numbers show why
   if they don't.
   Since 2026-11-23 the timing also has the gap from one frame to the next (`gap_ms`),
@@ -423,7 +424,8 @@ Not yet tried with the phone or the real tree.
 `viewer/` is now `web/` (the server's page and the virtual WLED's screen), built into
 `treemap/web_dist/`. Kept: the tree and flat generators, the scan tests that use them as
 ground truth, and taking over a 1.x map (`data/tree_map.json`) from a device's page.
-`treemap wled check`'s WiFi-sleep and brightness warnings aren't on the server's page yet.
+`treemap wled check`'s warnings (WiFi sleep, WLED's brightness) moved to the device page,
+with "Receive UDP realtime" off as a third.
 
 ## Phase 7: Home Assistant
 

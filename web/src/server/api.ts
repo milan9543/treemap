@@ -27,6 +27,7 @@ export interface Device {
     checked_s_ago: number | null;
     wled: { name: string; version: string | null; led_count: number } | null;
     error: string | null;
+    problems: string[]; // WLED settings that get in the way, each with its fix
   };
   // once its LED count is known:
   shape?: "tree" | "flat";

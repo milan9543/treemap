@@ -79,6 +79,37 @@ def wled_led_count(info: dict[str, Any]) -> int:
     return count
 
 
+def read_settings(host: str, timeout: float = PROBE_TIMEOUT_S) -> tuple[dict, dict]:
+    """WLED's ``/json/state`` and ``/json/cfg`` from ``host``, for :func:`wled_problems`.
+    Raises OSError, or ValueError on a reply that isn't JSON."""
+    out = []
+    for path in ("state", "cfg"):
+        with urllib.request.urlopen(f"http://{host}/json/{path}", timeout=timeout) as r:
+            data = json.loads(r.read())
+        out.append(data if isinstance(data, dict) else {})
+    return out[0], out[1]
+
+
+def wled_problems(state: dict[str, Any], cfg: dict[str, Any]) -> list[str]:
+    """What in WLED's settings gets in the way of the server's colours, each with the
+    fix. ``state``: its ``/json/state``; ``cfg``: its ``/json/cfg``."""
+    problems = []
+    live = cfg.get("if", {}).get("live", {}) if isinstance(cfg.get("if"), dict) else {}
+    if live.get("en") is False:
+        problems.append("\"Receive UDP realtime\" is off in WLED, so the LEDs don't show the "
+                        "server's colours. Switch it on in WLED's Sync Interfaces settings.")
+    bri = state.get("bri")
+    if isinstance(bri, int) and bri < 255 and live.get("maxbri") is not True:
+        problems.append(f"WLED's brightness is {bri}/255, which dims the server's colours too. "
+                        "Turn it to full, or tick \"Force max brightness\" in WLED's Sync "
+                        "Interfaces settings (the server has its own brightness).")
+    wifi = cfg.get("wifi")
+    if isinstance(wifi, dict) and wifi.get("sleep") is True:
+        problems.append("WiFi sleep is on in WLED, which holds frames up and makes effects "
+                        "stutter. Tick \"Disable WiFi sleep\" in WLED's WiFi Settings.")
+    return problems
+
+
 class DeviceStore:
     """``data/devices.json``: the devices, in the order they were added."""
 

@@ -16,8 +16,10 @@ POST    /devices                ``{"host", "name"?, "led_count"?}``: add a contr
                                 that doesn't answer yet is added without, unless given
 GET     /devices/{id}           the device: ``id``, ``name``, ``host``, ``virtual``,
                                 ``status`` (``alive``, ``checked_s_ago``, ``wled``: its
-                                name, version and LED count, ``error``), and once its
-                                LED count is known everything its LEDs are doing
+                                name, version and LED count, ``error``, ``problems``:
+                                WLED settings that get in the way, each with its fix),
+                                and once its LED count is known everything its LEDs are
+                                doing
 PUT     /devices/{id}           ``{"name"?, "led_count"?}``: rename it, or take WLED's
                                 LED count after it changed (its map must then be scanned
                                 again)
@@ -64,7 +66,9 @@ from treemap.devices import (
     DeviceStore,
     normalise_host,
     probe,
+    read_settings,
     wled_led_count,
+    wled_problems,
 )
 from treemap.effects import describe_effects
 from treemap.library import Library, LibraryError
@@ -75,6 +79,7 @@ log = logging.getLogger(__name__)
 API_VERSION = 2
 PREFIX = "/api/v2"
 CHECK_S = 5.0  # how often each controller is asked whether it's there
+SETTINGS_S = 60.0  # and how often its settings are checked (its whole config: not every 5 s)
 
 # Opens a device's LEDs on its controller; tests swap in a recorder.
 OpenLeds = Callable[[DeviceRecord, Config], LedOutput]
@@ -97,12 +102,14 @@ class Device:
         self.checked_at = 0.0
         self.wled: dict[str, Any] | None = None  # its name, version and LED count
         self.error: str | None = None
+        self.problems: list[str] = []  # WLED settings in the way (see wled_problems)
+        self.settings_at = 0.0  # when they were last checked (0: since it last answered)
 
     def status(self) -> dict[str, Any]:
         return {"alive": self.alive,
                 "checked_s_ago": round(time.monotonic() - self.checked_at, 1)
                 if self.checked_at else None,
-                "wled": self.wled, "error": self.error}
+                "wled": self.wled, "error": self.error, "problems": self.problems}
 
 
 class Api:
@@ -268,13 +275,21 @@ class Api:
 
     def _check(self, device: Device) -> None:
         """Ask the controller for its WLED info: is it there, how many LEDs, is it the
-        virtual one. A device without an LED count takes WLED's."""
+        virtual one. A device without an LED count takes WLED's. Its settings are checked
+        when it starts answering, then every SETTINGS_S."""
         try:
             info = probe(device.record.host)
             count = wled_led_count(info)
         except (OSError, ValueError) as e:
             device.alive, device.error = False, _reason(e)
+            device.problems, device.settings_at = [], 0.0
         else:
+            if time.monotonic() - device.settings_at >= SETTINGS_S:
+                try:
+                    device.problems = wled_problems(*read_settings(device.record.host))
+                    device.settings_at = time.monotonic()
+                except (OSError, ValueError):
+                    pass  # asked again at the next check
             device.alive, device.error = True, None
             device.wled = {"name": str(info.get("name") or ""), "version": info.get("ver"),
                            "led_count": count}

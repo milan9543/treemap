@@ -88,6 +88,7 @@ def test_the_server_adds_it_by_address(device, tmp_path):
         status, _, d = call(root + "/devices", {"host": f"http://127.0.0.1:{device.port}/"})
         assert status == 201, d
         assert (d["led_count"], d["virtual"], d["status"]["alive"]) == (120, True, True)
+        assert d["status"]["problems"] == []  # its settings were read, and are fine
         assert d["name"] == "treemap virtual WLED" and d["gamma"] == 1.0
         assert call(root + "/devices", {"host": f"127.0.0.1:{device.port}"})[0] == 409
 

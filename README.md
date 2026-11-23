@@ -84,8 +84,8 @@ LEDs, map, scans and effects. The first time there are none.
   the gap between frames, and the time to render and send each one, over the last 2 s.
   If it reads steady while the LEDs still speed up and slow down, the frames are held
   up on the Wi-Fi or in the controller, not by the server: on a Mac, AirDrop's
-  background radio (`sudo ifconfig awdl0 down` to test) or WLED's WiFi sleep ("Disable
-  WiFi sleep" in WLED's WiFi Settings) are the usual causes.
+  background radio (`sudo ifconfig awdl0 down` to test) or WLED's WiFi sleep (the device
+  page warns when it's on) are the usual causes.
 - **Front** (tree) or **Bottom** (flat), once a device has a map: **Set it** shows it on
   the LEDs (stopping the effect) and in the 3D view, as on the scan page's Review screen:
   a white stripe at the front, or the bottom edge white and the left side red. Turn it
@@ -96,9 +96,15 @@ LEDs, map, scans and effects. The first time there are none.
 - One device is one controller: a tree split over two controllers isn't covered yet.
 
 WLED shows the server's colours while they keep arriving and goes back to its own effect
-a few seconds after they stop. If WLED's settings show "Receive UDP realtime" switched
-off (Sync Interfaces), switch it on. Keep WLED's own brightness at full: it dims the
-server's colours too (the server has its own, `engine.brightness`).
+a few seconds after they stop. The device page warns, each with the fix, about WLED
+settings that get in the way (it reads them when the controller starts answering, then
+every minute):
+
+- **"Receive UDP realtime" off** (Sync Interfaces): the LEDs don't show the server's
+  colours at all.
+- **WLED's brightness below full**: it dims the server's colours too. Turn it up, or tick
+  "Force max brightness" (Sync Interfaces); the server has its own, `engine.brightness`.
+- **WiFi sleep on** (WiFi Settings): it holds frames up and makes effects stutter.
 
 The API is under `/api/v2` (see [treemap/api/app.py](treemap/api/app.py) and
 [treemap/api/device.py](treemap/api/device.py)). The server's own endpoints are

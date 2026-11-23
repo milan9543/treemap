@@ -4,6 +4,7 @@ import struct
 import numpy as np
 import pytest
 
+from treemap.devices import wled_problems
 from treemap.outputs import OutputError
 from treemap.outputs.wled import Controller, WledOutput, ddp_packets
 
@@ -51,3 +52,15 @@ def test_frames_are_split_across_controllers_and_kept_alive(receiver):
 def test_unknown_host_is_a_clear_error():
     with pytest.raises(OutputError, match="can't find the WLED controller 'no-such-wled.invalid'"):
         WledOutput(10, [Controller("no-such-wled.invalid", 0, 10)])
+
+
+def test_wled_settings_that_get_in_the_way():
+    fine = ({"bri": 255}, {"wifi": {"sleep": False}, "if": {"live": {"en": True}}})
+    assert wled_problems(*fine) == []
+    problems = wled_problems({"bri": 128}, {"wifi": {"sleep": True},
+                                            "if": {"live": {"en": False}}})
+    assert len(problems) == 3
+    assert "Receive UDP realtime" in problems[0] and "128/255" in problems[1]
+    assert "Disable WiFi sleep" in problems[2]
+    # dimmed, but WLED shows realtime colours at full anyway
+    assert wled_problems({"bri": 128}, {"if": {"live": {"maxbri": True}}}) == []
