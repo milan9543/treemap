@@ -227,6 +227,9 @@ from the device's QR code, filming the screen:
 - **New layouts:** the panel makes a new tree, or a flat layout in rows or a spiral, with
   any LED count and number of strips. After changing the LED count, open the device on
   the server's page and use the new count (its map must then be scanned again).
+- **Skip the scan:** on the server's page, **Use the true map** (under Scan with the
+  phone, on a virtual device) takes where the virtual WLED's LEDs really are as the
+  map, to try effects without filming the screen. Do it again after a new layout.
 
 The layout is kept in `data/virtual_wled.json`. A controller's address may carry a port
 like this for WLED's JSON API; DDP always goes to port 4048. macOS may ask whether

@@ -88,6 +88,7 @@ def test_info_and_cors(serve):
     assert status == 200 and device["led_count"] == 400 and device["name"] == "Tree"
     assert device["map"] is None and device["busy"] is None
     assert device["status"]["alive"] is False  # nothing answers on port 9
+    assert call(base + "/map/truth", {})[0] == 400  # only a virtual WLED has a true map
 
     status, headers, _ = call(base + "/leds", method="OPTIONS", headers={
         "Origin": PAGE, "Access-Control-Request-Method": "POST",

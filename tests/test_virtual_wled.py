@@ -15,7 +15,8 @@ from treemap.devices import probe, wled_led_count
 from treemap.outputs.wled import Controller, WledOutput
 from treemap.sim.flat import FlatSpec, generate_flat
 from treemap.sim.tree import SpecError
-from treemap.sim.virtual_wled import VirtualWled, new_layout
+from treemap.sim.truth import true_map
+from treemap.sim.virtual_wled import VirtualWled, layout_dict, new_layout
 
 
 @pytest.mark.parametrize("pattern", ["rows", "spiral"])
@@ -102,6 +103,14 @@ def test_the_server_adds_it_by_address(device, tmp_path):
         frame = call(base + "/frame")[2]
         assert frame["seq"] > 0 and frame["rgb"]
 
+        # It knows where its LEDs really are: that can be the map, in place of a scan.
+        status, _, m = call(base + "/map/truth", {})
+        assert status == 200 and m["shape"] == "flat" and m["counts"]["ok"] == 120, m
+        true = device.layout.positions[:, :2]
+        normalised = (true - [true[:, 0].mean(), true[:, 1].min()]) / np.ptp(true[:, 1])
+        assert np.allclose(np.array(m["positions"])[:, :2], normalised, atol=1e-3)
+        assert call(base)[2]["map"]["source"] == "virtual WLED"
+
         assert call(base + "/send", {"on": False})[0] == 200  # the page only: LEDs dark
         time.sleep(0.3)
         assert not any(device.last_frame)
@@ -118,3 +127,10 @@ def test_the_server_adds_it_by_address(device, tmp_path):
     finally:
         server.stop()
         api.close()
+
+
+def test_a_trees_true_map_is_its_normalised_positions():
+    tree = new_layout("tree", {"seed": 2})
+    m = true_map(layout_dict(tree))
+    assert m.shape == "tree" and m.counts()["ok"] == tree.led_count
+    assert np.allclose(m.positions, tree.normalised_positions(), atol=1e-3)

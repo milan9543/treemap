@@ -45,6 +45,8 @@ POST    /map/interpolate  ``{"index", "interpolate": true}``: ignore an LED's re
                           (false) use them again; answers once the map is solved again
 POST    /map/adopt        use the map and scans from before there were devices
                           (``data/tree_map.json``), if it has as many LEDs
+POST    /map/truth        a virtual WLED's true LED positions as the map, in place of a
+                          scan (:mod:`treemap.sim.truth`)
 ======  ================  ==============================================================
 
 A scan started with ``camera`` (the page sends the phone's model and camera label) sets
@@ -90,6 +92,7 @@ from treemap.library import Library
 from treemap.mapping.model import MapFile, TreeMap
 from treemap.outputs.base import LedOutput
 from treemap.player import Player
+from treemap.sim.truth import fetch_true_map
 
 CAMERA_ID = "browser"  # whose measured colours a scan from the page reads by
 STATUS_LETTERS = {"ok": "o", "interpolated": "i", "failed": "f"}
@@ -138,6 +141,7 @@ class DeviceApi:
         ("POST", "/map/orientation", "map_orientation"),
         ("POST", "/map/interpolate", "map_interpolate"),
         ("POST", "/map/adopt", "map_adopt"),
+        ("POST", "/map/truth", "map_truth"),
     )
 
     def __init__(self, record: DeviceRecord, cfg: Config, output: DeviceOutput,
@@ -225,6 +229,7 @@ class DeviceApi:
                 "fits": tree_map.led_count == self.n,
                 "shape": tree_map.shape,
                 "created": tree_map.meta.get("created"),
+                "source": tree_map.meta.get("source"),  # "virtual WLED": its true positions
                 "counts": tree_map.counts(),
                 "orientation": self._orientation(tree_map),
             },
@@ -424,6 +429,24 @@ class DeviceApi:
         scans = self.legacy_dir / "scans" / self.cfg.scan.profile
         if scans.is_dir() and not self.cfg.scan_dir.exists():
             shutil.copytree(scans, self.cfg.scan_dir)  # so it can be solved again
+        return self.get_map(req)
+
+    def map_truth(self, req: Request) -> dict[str, Any]:
+        """The virtual WLED's true LED positions as the map, in place of a scan."""
+        if not self.record.virtual:
+            raise HttpError(400, "only the virtual WLED knows where its LEDs really are")
+        if self.jobs.busy:
+            raise HttpError(409, f"a {self.jobs.state()['kind']} is changing the map; wait for it")
+        try:
+            tree_map = fetch_true_map(self.record.host)
+        except OSError as e:
+            raise HttpError(502, f"can't reach the virtual WLED: {e}") from None
+        except (ValueError, KeyError, TypeError) as e:
+            raise HttpError(502, f"the virtual WLED's layout can't be read: {e}") from None
+        if tree_map.led_count != self.n:
+            raise HttpError(409, f"the virtual WLED has {tree_map.led_count} LEDs now, "
+                                 f"this device {self.n}")
+        tree_map.save(self.cfg.map_path)
         return self.get_map(req)
 
     def map_orientation(self, req: Request) -> dict[str, Any]:

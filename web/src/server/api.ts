@@ -32,7 +32,7 @@ export interface Device {
   // once its LED count is known:
   shape?: "tree" | "flat";
   map?: null | { led_count: number; fits: boolean; shape: "tree" | "flat"; created: string | null;
-    counts: Counts; orientation: Orientation };
+    source: string | null; counts: Counts; orientation: Orientation }; // source: "virtual WLED"
   legacy_map?: boolean; // a map from before devices fits it
   busy?: "scan" | "effect" | "leds" | null;
   effect?: string | null;
@@ -161,6 +161,7 @@ export function deviceApi(id: string) {
     remove: () => call<unknown>("DELETE", d),
     map: () => call<MapInfo>("GET", `${d}/map`),
     adoptMap: () => call<MapInfo>("POST", `${d}/map/adopt`, {}),
+    trueMap: () => call<MapInfo>("POST", `${d}/map/truth`, {}),
     setOrientation: (o: Orientation) => call<MapInfo>("POST", `${d}/map/orientation`, o),
     frame: () => call<{ seq: number; rgb: string }>("GET", `${d}/frame`),
     setSend: (on: boolean) => call<{ send: boolean }>("POST", `${d}/send`, { on }),

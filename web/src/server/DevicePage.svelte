@@ -177,7 +177,9 @@
             <p class="muted small">The controller isn't answering: switch it on first, the scan lights its LEDs.</p>
           {/if}
           <p class="map-line">
-            {#if device.map?.fits}
+            {#if device.map?.fits && device.map.source === "virtual WLED"}
+              The virtual WLED's true positions, taken {date(device.map.created)}.
+            {:else if device.map?.fits}
               Scanned {date(device.map.created)}: <span class="ok">{device.map.counts.ok}</span> found,
               <span class="warn">{device.map.counts.interpolated}</span> guessed,
               <span class="bad">{device.map.counts.failed}</span> missing.
@@ -185,6 +187,15 @@
               <span class="muted">Not scanned yet.</span>
             {/if}
           </p>
+          {#if device.virtual}
+            <div class="legacy">
+              <span class="muted small">Skip the scan: take where the virtual WLED's LEDs really are.</span>
+              <Button size="sm" disabled={device.busy === "scan"} onclick={() => {
+                if (!device?.map || confirm("Replace this device's map with the virtual WLED's true positions?"))
+                  void act(() => dev.trueMap());
+              }}>Use the true map</Button>
+            </div>
+          {/if}
           {#if device.legacy_map}
             <div class="legacy">
               <span class="muted small">A map from before devices fits it ({device.led_count} LEDs).</span>
